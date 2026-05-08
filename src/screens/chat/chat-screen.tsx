@@ -521,9 +521,6 @@ export function ChatScreen({
       return stored
     return 'low'
   })
-  const { alertOpen, alertThreshold, alertPercent, dismissAlert } =
-    useContextAlert()
-
   const pendingStartRef = useRef(false)
   const composerHandleRef = useRef<ChatComposerHandle | null>(null)
   // Idempotency guard prevents duplicate sends on paste/attach double-fire.
@@ -567,6 +564,8 @@ export function ChatScreen({
     sessionsFetching: _sessionsFetching,
     refetchSessions: _refetchSessions,
   } = useChatSessions({ activeFriendlyId, isNewChat, forcedSessionKey })
+  const { alertOpen, alertThreshold, alertPercent, dismissAlert } =
+    useContextAlert(forcedSessionKey || activeFriendlyId)
   const {
     historyQuery,
     historyMessages,

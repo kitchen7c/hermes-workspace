@@ -146,3 +146,9 @@ skills-bundle/
 .hermes/
 .env.bak-*
 pr-triage-20260505-*/
+
+# Graph visualization outputs (generated)
+graphify-out/
+
+# Local package store (pnpm dev cache)
+.pnpm-store/

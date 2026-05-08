@@ -10,6 +10,9 @@ import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import { isAuthenticated } from '../../server/auth-middleware'
 import { requireJsonContentType } from '../../server/rate-limit'
+import { getUser } from '../../server/request-context'
+import { isSessionOwnedByUser } from '../../server/session-helpers'
+import { resolveMainForUser } from '../../server/session-utils'
 
 export const Route = createFileRoute('/api/session-send')({
   server: {
@@ -25,13 +28,26 @@ export const Route = createFileRoute('/api/session-send')({
             sessionKey?: string
             message?: string
           }
-          const sessionKey = (body.sessionKey || '').trim()
+          let sessionKey = (body.sessionKey || '').trim()
           const message = (body.message || '').trim()
-          if (!sessionKey) {
+
+          // Resolve 'main' against current user
+          if (sessionKey === 'main') {
+            const user = getUser(request)
+            sessionKey = await resolveMainForUser(user)
+          }
+
+          if (!sessionKey || sessionKey === 'new') {
             return json(
               { ok: false, error: 'sessionKey is required' },
               { status: 400 },
             )
+          }
+
+          // Check ownership
+          const user = getUser(request)
+          if (!isSessionOwnedByUser(user, sessionKey)) {
+            return json({ ok: false, error: 'Not found' }, { status: 404 })
           }
           if (!message) {
             return json(

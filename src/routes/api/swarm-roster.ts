@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
-import { isAuthenticated } from '../../server/auth-middleware'
+import { isAuthenticated } from '../../server/auth-middleware';
+import { requireAdmin } from '../../server/admin-gate';
 import { SWARM_ROSTER_PATH, readSwarmRoster, upsertSwarmRosterWorker } from '../../server/swarm-roster'
 import { listSwarmWorkerIds } from '../../server/swarm-foundation'
 
@@ -11,6 +12,8 @@ export const Route = createFileRoute('/api/swarm-roster')({
         if (!isAuthenticated(request)) {
           return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request);
+        if (adminCheck) return adminCheck;
         const ids = listSwarmWorkerIds()
         return json({
           ok: true,
@@ -23,6 +26,8 @@ export const Route = createFileRoute('/api/swarm-roster')({
         if (!isAuthenticated(request)) {
           return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request);
+        if (adminCheck) return adminCheck;
         let body: unknown
         try {
           body = await request.json()

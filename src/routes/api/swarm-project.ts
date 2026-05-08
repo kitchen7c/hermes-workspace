@@ -3,7 +3,8 @@ import { json } from '@tanstack/react-start'
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { isAuthenticated } from '../../server/auth-middleware'
+import { isAuthenticated } from '../../server/auth-middleware';
+import { requireAdmin } from '../../server/admin-gate';
 import { getProfilesDir } from '../../server/claude-paths'
 
 type PreviewSource = 'runtime' | 'script-port' | 'none'
@@ -318,6 +319,8 @@ export const Route = createFileRoute('/api/swarm-project')({
         if (!isAuthenticated(request)) {
           return json({ error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request);
+        if (adminCheck) return adminCheck;
         const url = new URL(request.url)
         const workerIdRaw = (url.searchParams.get('workerId') ?? '').trim()
         if (!workerIdRaw || !isValidWorkerId(workerIdRaw)) {

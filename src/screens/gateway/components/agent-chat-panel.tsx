@@ -106,7 +106,9 @@ export function AgentChatPanel({
   // ── SSE streaming for real-time word-by-word updates ───────────────────────
   useEffect(() => {
     if (!sessionKey) return
-    const source = new EventSource('/api/chat-events')
+    const source = new EventSource(
+      `/api/chat-events?sessionKey=${encodeURIComponent(sessionKey)}`,
+    )
     let streamingText = ''
 
     function matchesSession(payload: Record<string, unknown>): boolean {

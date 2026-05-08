@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
-import { isAuthenticated } from '../../server/auth-middleware'
+import { isAuthenticated } from '../../server/auth-middleware';
+import { requireAdmin } from '../../server/admin-gate';
 import { getSwarmMission, listSwarmMissions, listSwarmReports, SWARM_MISSIONS_PATH } from '../../server/swarm-missions'
 
 export const Route = createFileRoute('/api/swarm-missions')({
@@ -10,6 +11,8 @@ export const Route = createFileRoute('/api/swarm-missions')({
         if (!isAuthenticated(request)) {
           return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request);
+        if (adminCheck) return adminCheck;
         const url = new URL(request.url)
         const id = url.searchParams.get('id')?.trim()
         const limitRaw = Number(url.searchParams.get('limit') ?? 20)

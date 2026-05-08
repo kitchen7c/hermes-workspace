@@ -7,7 +7,9 @@ import { json } from '@tanstack/react-start'
 import {
   isAuthenticated,
   requireLocalOrAuth,
+  getAuthMode,
 } from '../../server/auth-middleware'
+import { getUser, getUserContext } from '../../server/request-context'
 import {
   getClientIp,
   rateLimit,
@@ -16,6 +18,7 @@ import {
   safeErrorMessage,
 } from '../../server/rate-limit'
 import { loadWorkspaceCatalog } from './workspace'
+import type { UserWorkspaceContext } from '../../server/request-context'
 
 const execFileAsync = promisify(execFile)
 
@@ -36,8 +39,10 @@ type FileEntry = {
  * form rejects any candidate that escapes the root via `..` segments or
  * that resolves to an absolute path outside the root. See #121.
  */
-async function getWorkspaceRoot(): Promise<string> {
-  const catalog = await loadWorkspaceCatalog()
+async function getWorkspaceRoot(
+  ctx?: UserWorkspaceContext | null,
+): Promise<string> {
+  const catalog = await loadWorkspaceCatalog(ctx)
   if (!catalog.isValid || !catalog.path) {
     throw new Error('No valid workspace selected')
   }
@@ -262,7 +267,7 @@ export const Route = createFileRoute('/api/files')({
             url.searchParams.get('maxEntries'),
           )
 
-          const workspaceRoot = await getWorkspaceRoot()
+          const workspaceRoot = await getWorkspaceRoot(getUserContext(request))
 
           if (action === 'list' && hasGlob(inputPath)) {
             const globListing = await readGlobDirectory(
@@ -332,7 +337,7 @@ export const Route = createFileRoute('/api/files')({
         }
 
         try {
-          const workspaceRoot = await getWorkspaceRoot()
+          const workspaceRoot = await getWorkspaceRoot(getUserContext(request))
           const contentType = request.headers.get('content-type') || ''
           if (!contentType.includes('multipart/form-data')) {
             const csrfCheck = requireJsonContentType(request)

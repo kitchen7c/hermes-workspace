@@ -9,7 +9,9 @@ import {
   getGatewayCapabilities,
   sendChat,
 } from '../../../server/claude-api'
-import { resolveSessionKey } from '../../../server/session-utils'
+import { resolveSessionKey, resolveMainForUser } from '../../../server/session-utils'
+import { getUser } from '../../../server/request-context'
+import { isSessionOwnedByUser } from '../../../server/session-helpers'
 
 export const Route = createFileRoute('/api/sessions/send')({
   server: {
@@ -52,11 +54,29 @@ export const Route = createFileRoute('/api/sessions/send')({
             )
           }
 
-          const { sessionKey } = await resolveSessionKey({
+          let { sessionKey } = await resolveSessionKey({
             rawSessionKey,
             friendlyId,
             defaultKey: 'main',
           })
+
+          // Resolve 'main' against current user
+          const user = getUser(request)
+          if (sessionKey === 'main') {
+            sessionKey = await resolveMainForUser(user)
+          }
+
+          if (sessionKey === 'new') {
+            return json(
+              { ok: false, error: "Cannot send to 'new' — create a session first" },
+              { status: 400 },
+            )
+          }
+
+          // Check ownership
+          if (!isSessionOwnedByUser(user, sessionKey)) {
+            return json({ ok: false, error: 'Not found' }, { status: 404 })
+          }
 
           const idempotencyKey =
             typeof body.idempotencyKey === 'string' &&

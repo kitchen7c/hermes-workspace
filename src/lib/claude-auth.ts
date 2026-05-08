@@ -2,6 +2,12 @@ export interface AuthStatus {
   authenticated: boolean
   authRequired: boolean
   error?: string
+  multiUser?: boolean
+  user?: {
+    id: string
+    username: string
+    role: 'admin' | 'user'
+  }
 }
 
 export async function fetchClaudeAuthStatus(

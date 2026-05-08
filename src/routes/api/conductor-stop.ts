@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import { isAuthenticated } from '../../server/auth-middleware'
+import { requireAdmin } from '../../server/admin-gate'
 import { requireJsonContentType } from '../../server/rate-limit'
 import { deleteSession } from '../../server/claude-api'
 import {
@@ -15,6 +16,8 @@ export const Route = createFileRoute('/api/conductor-stop')({
         if (!isAuthenticated(request)) {
           return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request)
+        if (adminCheck) return adminCheck
         const csrfCheck = requireJsonContentType(request)
         if (csrfCheck) return csrfCheck
 

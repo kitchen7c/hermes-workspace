@@ -5,8 +5,10 @@ import {
   collectSyntheticLiveToolEvents,
   createSyntheticLiveToolTracker,
 } from './-send-stream-live-tools'
-import { resolveSessionKey } from '../../server/session-utils'
+import { resolveSessionKey, resolveMainForUser } from '../../server/session-utils'
 import { isAuthenticated } from '../../server/auth-middleware'
+import { getUser, getUserContext } from '../../server/request-context'
+import { claimBeforeCreate, isSessionOwnedByUser } from '../../server/session-helpers'
 import { requireJsonContentType } from '../../server/rate-limit'
 import { publishChatEvent } from '../../server/chat-event-bus'
 import { loadWorkspaceCatalog } from './workspace'
@@ -295,6 +297,9 @@ export const Route = createFileRoute('/api/send-stream')({
         if (csrfCheck) return csrfCheck
         await ensureGatewayProbed()
 
+        const user = getUser(request)
+        const userCtx = getUserContext(request)
+
         // Read body manually to handle large payloads (image attachments
         // can push the JSON body above the default ~1MB parse limit).
         let body: Record<string, unknown> = {}
@@ -335,6 +340,12 @@ export const Route = createFileRoute('/api/send-stream')({
           })
           sessionKey = resolved.sessionKey
           resolvedFriendlyId = resolved.sessionKey
+
+          // Resolve 'main' against the current user's sessions
+          if (sessionKey === 'main') {
+            sessionKey = await resolveMainForUser(user)
+            resolvedFriendlyId = sessionKey
+          }
         } catch (err) {
           const errorMsg = normalizeClaudeErrorMessage(err)
           if (errorMsg === 'session not found') {
@@ -350,6 +361,14 @@ export const Route = createFileRoute('/api/send-stream')({
             status: 500,
             headers: { 'Content-Type': 'application/json' },
           })
+        }
+
+        // Check session ownership (skip for 'new' — will be claimed after creation)
+        if (sessionKey !== 'new' && !isSessionOwnedByUser(user, sessionKey)) {
+          return new Response(
+            JSON.stringify({ ok: false, error: 'Not found' }),
+            { status: 404, headers: { 'Content-Type': 'application/json' } },
+          )
         }
 
         // Check if the selected model is a local provider model — force portable + direct routing
@@ -371,9 +390,11 @@ export const Route = createFileRoute('/api/send-stream')({
         if (chatMode === 'portable' && sessionKey === 'new') {
           sessionKey = crypto.randomUUID()
           resolvedFriendlyId = sessionKey
+          // Claim ownership for the current user
+          if (user) claimBeforeCreate(user, sessionKey)
         }
 
-        const workspaceScope = await loadWorkspaceCatalog().catch(() => null)
+        const workspaceScope = await loadWorkspaceCatalog(userCtx).catch(() => null)
         const scopedMessage = buildWorkspaceScopedTextMessage(
           getChatMessage(message, attachments),
           workspaceScope,
@@ -494,7 +515,7 @@ export const Route = createFileRoute('/api/send-stream')({
                 const portableSessionKey = sessionKey
 
                 // Ensure session exists (user message appended after building history)
-                ensureLocalSession(portableSessionKey, typeof body.model === 'string' ? body.model : undefined)
+                ensureLocalSession(portableSessionKey, typeof body.model === 'string' ? body.model : undefined, userCtx)
                 const portableFriendlyId =
                   resolvedFriendlyId ||
                   requestedFriendlyId ||
@@ -529,7 +550,7 @@ export const Route = createFileRoute('/api/send-stream')({
                     ? [{ role: 'system', content: `Respond in ${locale === 'es' ? 'Spanish' : locale === 'fr' ? 'French' : locale === 'zh' ? 'Chinese' : locale === 'de' ? 'German' : locale === 'ja' ? 'Japanese' : locale === 'ko' ? 'Korean' : locale === 'pt' ? 'Portuguese' : locale === 'ru' ? 'Russian' : locale === 'ar' ? 'Arabic' : 'English'}. The user's interface is set to this language.` }]
                     : []
                   // Load persisted history for this session, then append user message
-                  const persistedMessages = getLocalMessages(portableSessionKey)
+                  const persistedMessages = getLocalMessages(portableSessionKey, userCtx)
                   const persistedHistory = persistedMessages.map(m => ({
                     role: m.role as 'user' | 'assistant' | 'system',
                     content: m.content,
@@ -540,7 +561,7 @@ export const Route = createFileRoute('/api/send-stream')({
                     role: 'user',
                     content: typeof body.message === 'string' ? body.message : '',
                     timestamp: Date.now(),
-                  })
+                  }, userCtx)
                   // Use persisted history if available, otherwise fall back to client-sent history
                   const effectiveHistory = persistedHistory.length > 0 ? persistedHistory : history
                   const portableMessages: Array<OpenAICompatMessage> = [
@@ -682,8 +703,8 @@ export const Route = createFileRoute('/api/send-stream')({
                         role: 'assistant',
                         content: accumulated,
                         timestamp: Date.now(),
-                      })
-                      touchLocalSession(portableSessionKey)
+                      }, userCtx)
+                      touchLocalSession(portableSessionKey, userCtx)
                       persistActiveRun((runSessionKey, activeId) =>
                         markRunStatus(runSessionKey, activeId, 'complete'),
                       )
@@ -796,8 +817,8 @@ export const Route = createFileRoute('/api/send-stream')({
                     role: 'assistant',
                     content: accumulated,
                     timestamp: Date.now(),
-                  })
-                  touchLocalSession(portableSessionKey)
+                  }, userCtx)
+                  touchLocalSession(portableSessionKey, userCtx)
 
                   persistActiveRun((runSessionKey, activeId) =>
                     markRunStatus(runSessionKey, activeId, 'complete'),
@@ -880,6 +901,8 @@ export const Route = createFileRoute('/api/send-stream')({
                   const session = await createSession()
                   sessionKey = session.id
                   resolvedFriendlyId = session.id
+                  // Claim ownership for the current user
+                  if (user) claimBeforeCreate(user, session.id)
                 }
               }
 

@@ -8,9 +8,11 @@ import {
   listSessions,
   toChatMessage,
 } from '../../server/claude-api'
-import { resolveSessionKey } from '../../server/session-utils'
-import { isAuthenticated } from '@/server/auth-middleware'
+import { resolveSessionKey, resolveMainForUser } from '../../server/session-utils'
+import { isAuthenticated } from '../../server/auth-middleware';
 import { getLocalSession, getLocalMessages } from '../../server/local-session-store'
+import { getUser, getUserContext } from '../../server/request-context'
+import { isSessionOwnedByUser } from '../../server/session-helpers'
 
 export const Route = createFileRoute('/api/history')({
   server: {
@@ -20,6 +22,8 @@ export const Route = createFileRoute('/api/history')({
           return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
         await ensureGatewayProbed()
+        const user = getUser(request)
+
         if (!getGatewayCapabilities().sessions) {
           return json({
             sessionKey: 'new',
@@ -39,7 +43,8 @@ export const Route = createFileRoute('/api/history')({
             friendlyId,
             defaultKey: 'main',
           })
-          // Keep /chat/new empty until the first message creates a real session.
+
+          // 'new' has no history
           if (sessionKey === 'new') {
             return json({
               sessionKey: 'new',
@@ -47,50 +52,24 @@ export const Route = createFileRoute('/api/history')({
               messages: [],
             })
           }
-          // "main" doesn't exist in Claude — resolve it to the user's real
-          // main chat session. We prefer (in order):
-          //   1. The most recent session with a real human-set title
-          //      (label !== id, e.g. "hows everything"). This is what users
-          //      actually mean by "main".
-          //   2. The most recent non-internal session with messages.
-          // Cron + Operations per-agent sessions are skipped so the
-          // orchestrator chat doesn't latch onto runtime junk.
+
+          // Resolve 'main' against the user's owned sessions
           if (sessionKey === 'main') {
-            try {
-              const sessions = await listSessions(30, 0)
-              const isInternalKey = (id: string) =>
-                id.startsWith('cron_') ||
-                id.startsWith('cron:') ||
-                id.startsWith('agent:main:ops-')
-              const hasRealTitle = (s: { id: string; title?: string | null }) => {
-                const t = (s.title ?? '').trim()
-                return t.length > 0 && t !== s.id
-              }
-              const titled = sessions.find(
-                (s) => !isInternalKey(s.id) && hasRealTitle(s),
-              )
-              const fallback = titled
-                ? null
-                : sessions.find(
-                    (s) =>
-                      !isInternalKey(s.id) &&
-                      typeof s.message_count === 'number' &&
-                      s.message_count > 0,
-                  )
-              const candidate = titled ?? fallback
-              if (candidate) {
-                sessionKey = candidate.id
-              } else {
-                return json({
-                  sessionKey: 'new',
-                  sessionId: 'new',
-                  messages: [],
-                })
-              }
-            } catch {
-              return json({ sessionKey: 'new', sessionId: 'new', messages: [] })
+            sessionKey = await resolveMainForUser(user)
+            if (sessionKey === 'new') {
+              return json({
+                sessionKey: 'new',
+                sessionId: 'new',
+                messages: [],
+              })
             }
           }
+
+          // Check ownership
+          if (!isSessionOwnedByUser(user, sessionKey)) {
+            return json({ ok: false, error: 'Not found' }, { status: 404 })
+          }
+
           let messages: Awaited<ReturnType<typeof getMessages>> = []
           try {
             messages = await getMessages(sessionKey)
@@ -98,11 +77,11 @@ export const Route = createFileRoute('/api/history')({
             messages = []
           }
 
-          // Fallback to local session store for portable/local model sessions
+          // Fallback to local session store
           if (messages.length === 0) {
-            const localSession = getLocalSession(sessionKey)
+            const localSession = getLocalSession(sessionKey, getUserContext(request))
             if (localSession) {
-              const localMessages = getLocalMessages(sessionKey)
+              const localMessages = getLocalMessages(sessionKey, getUserContext(request))
               return json({
                 sessionKey,
                 sessionId: sessionKey,

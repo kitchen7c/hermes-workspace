@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import { isAuthenticated } from '../../../server/auth-middleware'
+import { requireAdmin } from '../../../server/admin-gate'
 import {
   BEARER_TOKEN,
   CLAUDE_API,
@@ -18,6 +19,8 @@ export const Route = createFileRoute('/api/skills/uninstall')({
         if (!isAuthenticated(request)) {
           return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request)
+        if (adminCheck) return adminCheck
         try {
           const body = (await request.json()) as {
             skillId?: string

@@ -4,8 +4,10 @@ import { z } from 'zod'
 import {
   createSessionCookie,
   generateSessionToken,
+  getAuthMode,
   isPasswordProtectionEnabled,
   storeSessionToken,
+  storeUserSessionToken,
   verifyPassword,
 } from '../../server/auth-middleware'
 import {
@@ -14,8 +16,14 @@ import {
   rateLimitResponse,
   requireJsonContentType,
 } from '../../server/rate-limit'
+import { hasAnyUser, verifyUserCredentials } from '../../server/user-store'
 
-const AuthSchema = z.object({
+const LegacyAuthSchema = z.object({
+  password: z.string().max(1000),
+})
+
+const MultiUserAuthSchema = z.object({
+  username: z.string().min(1).max(50),
   password: z.string().max(1000),
 })
 
@@ -26,14 +34,6 @@ export const Route = createFileRoute('/api/auth')({
         const csrfCheck = requireJsonContentType(request)
         if (csrfCheck) return csrfCheck
 
-        // If password protection is disabled, reject auth attempts
-        if (!isPasswordProtectionEnabled()) {
-          return json(
-            { ok: false, error: 'Authentication not required' },
-            { status: 400 },
-          )
-        }
-
         // Rate limit: max 5 auth attempts per minute per IP
         const ip = getClientIp(request)
         if (!rateLimit(`auth:${ip}`, 5, 60_000)) {
@@ -42,8 +42,52 @@ export const Route = createFileRoute('/api/auth')({
 
         try {
           const raw = await request.json().catch(() => ({}))
-          const parsed = AuthSchema.safeParse(raw)
+          const authMode = getAuthMode()
 
+          if (authMode === 'multi-user') {
+            // Multi-user mode: username + password
+            const parsed = MultiUserAuthSchema.safeParse(raw)
+            if (!parsed.success) {
+              return json(
+                { ok: false, error: 'Username and password required' },
+                { status: 400 },
+              )
+            }
+
+            const { username, password } = parsed.data
+            const user = await verifyUserCredentials(username, password)
+
+            if (!user) {
+              await new Promise((resolve) => setTimeout(resolve, 1000))
+              return json(
+                { ok: false, error: 'Invalid username or password' },
+                { status: 401 },
+              )
+            }
+
+            const token = generateSessionToken()
+            storeUserSessionToken(token, user.id)
+
+            return json(
+              { ok: true, username: user.username, role: user.role },
+              {
+                status: 200,
+                headers: {
+                  'Set-Cookie': createSessionCookie(token),
+                },
+              },
+            )
+          }
+
+          // Legacy mode: password only
+          if (!isPasswordProtectionEnabled()) {
+            return json(
+              { ok: false, error: 'Authentication not required' },
+              { status: 400 },
+            )
+          }
+
+          const parsed = LegacyAuthSchema.safeParse(raw)
           if (!parsed.success) {
             return json(
               { ok: false, error: 'Invalid request' },
@@ -52,12 +96,9 @@ export const Route = createFileRoute('/api/auth')({
           }
 
           const { password } = parsed.data
-
-          // Verify password
           const valid = verifyPassword(password)
 
           if (!valid) {
-            // Add small delay to prevent brute force
             await new Promise((resolve) => setTimeout(resolve, 1000))
             return json(
               { ok: false, error: 'Invalid password' },
@@ -65,11 +106,9 @@ export const Route = createFileRoute('/api/auth')({
             )
           }
 
-          // Generate session token
           const token = generateSessionToken()
           storeSessionToken(token)
 
-          // Return success with Set-Cookie header
           return json(
             { ok: true },
             {

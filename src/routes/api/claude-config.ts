@@ -8,6 +8,7 @@ import os from 'node:os'
 import { createFileRoute } from '@tanstack/react-router'
 import YAML from 'yaml'
 import { isAuthenticated } from '../../server/auth-middleware'
+import { requireAdmin } from '../../server/admin-gate'
 import {
   ensureGatewayProbed,
   getCapabilities,
@@ -236,6 +237,8 @@ export const Route = createFileRoute('/api/claude-config')({
       PATCH: async ({ request }) => {
         const authResult = isAuthenticated(request) as AuthResult
         if (authResult !== true) return authResult
+        const adminCheck = requireAdmin(request)
+        if (adminCheck) return adminCheck
         await ensureGatewayProbed()
         if (!getCapabilities().config) {
           return new Response(

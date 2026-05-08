@@ -4,7 +4,8 @@ import { execFile } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { isAuthenticated } from '../../server/auth-middleware'
+import { isAuthenticated } from '../../server/auth-middleware';
+import { requireAdmin } from '../../server/admin-gate';
 import { readWorkerMessages, type SwarmChatMessage } from '../../server/swarm-chat-reader'
 
 type DirectChatRequest = {
@@ -243,6 +244,8 @@ export const Route = createFileRoute('/api/swarm-direct-chat')({
         if (!isAuthenticated(request)) {
           return json({ error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request);
+        if (adminCheck) return adminCheck;
 
         let body: DirectChatRequest
         try {

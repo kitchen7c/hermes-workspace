@@ -58,7 +58,7 @@ function authHeaders(): Record<string, string> {
   return BEARER_TOKEN ? { Authorization: `Bearer ${BEARER_TOKEN}` } : {}
 }
 
-function emptySnapshot(): ContextUsageSnapshot {
+export function emptyContextUsageSnapshot(): ContextUsageSnapshot {
   return {
     ok: true,
     contextPercent: 0,
@@ -159,7 +159,7 @@ export async function readContextUsage(
       }
     }
 
-    if (!sessionData) return emptySnapshot()
+    if (!sessionData) return emptyContextUsageSnapshot()
 
     const model = String(sessionData.model || '')
     const maxTokens = getContextWindow(model)

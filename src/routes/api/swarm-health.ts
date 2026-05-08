@@ -3,7 +3,8 @@ import { json } from '@tanstack/react-start'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import * as yaml from 'yaml'
-import { isAuthenticated } from '../../server/auth-middleware'
+import { isAuthenticated } from '../../server/auth-middleware';
+import { requireAdmin } from '../../server/admin-gate';
 import { getLocalBinDir, getProfilesDir } from '../../server/claude-paths'
 
 type WorkerHealth = {
@@ -113,6 +114,8 @@ export const Route = createFileRoute('/api/swarm-health')({
         if (!isAuthenticated(request)) {
           return json({ error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request);
+        if (adminCheck) return adminCheck;
 
         const workspaceModel = formatModelDisplay(process.env.HERMES_DEFAULT_MODEL ?? process.env.CLAUDE_DEFAULT_MODEL ?? 'unknown', (process.env.HERMES_API_URL ?? process.env.CLAUDE_API_URL)?.includes('anthropic') ? 'anthropic' : 'unknown')
         const apiUrl = process.env.HERMES_API_URL ?? process.env.CLAUDE_API_URL ?? null

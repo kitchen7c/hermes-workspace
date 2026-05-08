@@ -13,6 +13,7 @@ import YAML from 'yaml'
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import { isAuthenticated } from '../../server/auth-middleware'
+import { getUser, getUserContext, type UserWorkspaceContext } from '../../server/request-context'
 import { requireJsonContentType } from '../../server/rate-limit'
 import {
   getActiveProfileName,
@@ -200,21 +201,24 @@ function activeProfileHome(): string {
   }
 }
 
-function workspaceStateDir(): string {
+function workspaceStateDir(ctx?: UserWorkspaceContext | null): string {
+  if (ctx && ctx.user.id !== 'legacy' && ctx.user.id !== 'anonymous') {
+    return ctx.workspaceStateDir
+  }
   return path.join(activeProfileHome(), 'webui_state')
 }
 
-function workspaceStateFile(): string {
-  return path.join(workspaceStateDir(), 'workspaces.json')
+function workspaceStateFile(ctx?: UserWorkspaceContext | null): string {
+  return path.join(workspaceStateDir(ctx), 'workspaces.json')
 }
 
-function lastWorkspaceFile(): string {
-  return path.join(workspaceStateDir(), 'last_workspace.txt')
+function lastWorkspaceFile(ctx?: UserWorkspaceContext | null): string {
+  return path.join(workspaceStateDir(ctx), 'last_workspace.txt')
 }
 
-async function readWorkspaceState(): Promise<WorkspaceState> {
+async function readWorkspaceState(ctx?: UserWorkspaceContext | null): Promise<WorkspaceState> {
   try {
-    const raw = await fs.readFile(workspaceStateFile(), 'utf-8')
+    const raw = await fs.readFile(workspaceStateFile(ctx), 'utf-8')
     const parsed = JSON.parse(raw) as unknown
     if (Array.isArray(parsed))
       return { workspaces: parsed as Array<WorkspaceEntry> }
@@ -225,11 +229,11 @@ async function readWorkspaceState(): Promise<WorkspaceState> {
   return {}
 }
 
-async function writeWorkspaceState(state: WorkspaceState): Promise<void> {
-  const stateDir = workspaceStateDir()
+async function writeWorkspaceState(state: WorkspaceState, ctx?: UserWorkspaceContext | null): Promise<void> {
+  const stateDir = workspaceStateDir(ctx)
   await fs.mkdir(stateDir, { recursive: true })
   await fs.writeFile(
-    workspaceStateFile(),
+    workspaceStateFile(ctx),
     JSON.stringify(
       {
         workspaces: state.workspaces ?? [],
@@ -241,7 +245,7 @@ async function writeWorkspaceState(state: WorkspaceState): Promise<void> {
     'utf-8',
   )
   if (state.last) {
-    await fs.writeFile(lastWorkspaceFile(), `${state.last}\n`, 'utf-8')
+    await fs.writeFile(lastWorkspaceFile(ctx), `${state.last}\n`, 'utf-8')
   }
 }
 
@@ -307,9 +311,53 @@ async function cleanExistingWorkspaces(
   return existing
 }
 
-export async function loadWorkspaceCatalog(): Promise<WorkspaceDetectionResponse> {
-  const state = await readWorkspaceState()
+export async function loadWorkspaceCatalog(
+  ctx?: UserWorkspaceContext | null,
+): Promise<WorkspaceDetectionResponse> {
+  const state = await readWorkspaceState(ctx)
   const configured = await configuredDefaultWorkspace()
+
+  // In multi-user mode, restrict to the user's managed workspace root
+  if (ctx && ctx.user.id !== 'legacy' && ctx.user.id !== 'anonymous') {
+    // Build a catalog rooted in the user's managed workspace
+    const workspaceRoot = ctx.workspaceRoot
+    // Ensure the workspace root exists
+    try {
+      await fs.mkdir(workspaceRoot, { recursive: true })
+    } catch { /* ignore */ }
+
+    let workspaces = await cleanExistingWorkspaces(state.workspaces ?? [])
+    // Filter to only entries inside the managed root
+    workspaces = workspaces.filter((w) => {
+      try {
+        return !path.relative(workspaceRoot, w.path).startsWith('..')
+      } catch {
+        return false
+      }
+    })
+
+    if (workspaces.length === 0) {
+      workspaces = [{ name: 'Home', path: workspaceRoot }]
+    }
+
+    const savedLast = readString(state.last)
+    const normalizedLast = savedLast ? normalizeCandidate(savedLast) : ''
+    const activeWorkspace =
+      workspaces.find((workspace) => workspace.path === normalizedLast) ??
+      workspaces.at(0)
+    const activePath = activeWorkspace ? activeWorkspace.path : workspaceRoot
+
+    return {
+      path: activePath,
+      folderName: activeWorkspace?.name || extractFolderName(activePath),
+      source: 'workspace-state',
+      isValid: true,
+      workspaces,
+      last: activePath,
+    }
+  }
+
+  // Legacy mode: use the shared global catalog
   const fallback = configured ?? { path: '', source: 'none' }
   let workspaces = await cleanExistingWorkspaces(state.workspaces ?? [])
 
@@ -367,19 +415,32 @@ export async function loadWorkspaceCatalog(): Promise<WorkspaceDetectionResponse
   }
 }
 
-export async function saveWorkspaceSelection(input: {
-  path?: string
-  name?: string
-}): Promise<WorkspaceDetectionResponse> {
+export async function saveWorkspaceSelection(
+  input: { path?: string; name?: string },
+  ctx?: UserWorkspaceContext | null,
+): Promise<WorkspaceDetectionResponse> {
   const rawPath = readString(input.path)
   if (!rawPath) throw new Error('path is required')
   const target = normalizeCandidate(rawPath)
   assertWorkspaceAllowed(target)
+
+  // In multi-user mode, reject paths outside the managed workspace root
+  if (ctx && ctx.user.id !== 'legacy' && ctx.user.id !== 'anonymous') {
+    const workspaceRoot = ctx.workspaceRoot
+    try {
+      if (path.relative(workspaceRoot, target).startsWith('..')) {
+        throw new Error('Path is outside your managed workspace')
+      }
+    } catch {
+      throw new Error('Path is outside your managed workspace')
+    }
+  }
+
   if (!(await isValidDirectory(target))) {
     throw new Error(`Path is not an existing directory: ${target}`)
   }
 
-  const current = await loadWorkspaceCatalog()
+  const current = await loadWorkspaceCatalog(ctx)
   const next = dedupeWorkspaces([
     ...current.workspaces,
     {
@@ -389,8 +450,8 @@ export async function saveWorkspaceSelection(input: {
         (current.workspaces.length === 0 ? 'Home' : extractFolderName(target)),
     },
   ])
-  await writeWorkspaceState({ workspaces: next, last: target })
-  return loadWorkspaceCatalog()
+  await writeWorkspaceState({ workspaces: next, last: target }, ctx)
+  return loadWorkspaceCatalog(ctx)
 }
 
 export const Route = createFileRoute('/api/workspace')({
@@ -401,7 +462,8 @@ export const Route = createFileRoute('/api/workspace')({
           return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
         try {
-          return json(await loadWorkspaceCatalog())
+          const ctx = getUserContext(request)
+          return json(await loadWorkspaceCatalog(ctx))
         } catch (err) {
           return json(
             {
@@ -428,7 +490,8 @@ export const Route = createFileRoute('/api/workspace')({
             path?: string
             name?: string
           }
-          return json(await saveWorkspaceSelection(body))
+          const ctx = getUserContext(request)
+          return json(await saveWorkspaceSelection(body, ctx))
         } catch (err) {
           return json(
             {

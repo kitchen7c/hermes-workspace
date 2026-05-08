@@ -3,7 +3,8 @@ import { json } from '@tanstack/react-start'
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { isAuthenticated } from '../../server/auth-middleware'
+import { isAuthenticated } from '../../server/auth-middleware';
+import { requireAdmin } from '../../server/admin-gate';
 import { getProfilesDir } from '../../server/claude-paths'
 import {
   buildSwarmDispatchMetadata,
@@ -244,6 +245,8 @@ export const Route = createFileRoute('/api/swarm-runtime')({
         if (!isAuthenticated(request)) {
           return json({ error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request);
+        if (adminCheck) return adminCheck;
         const ids = listWorkerIds()
         const tmuxAvailable = await tmuxIsInstalled()
         const entries = await Promise.all(ids.map((id) => buildEntry(id, tmuxAvailable)))
@@ -260,6 +263,8 @@ export const Route = createFileRoute('/api/swarm-runtime')({
         if (!isAuthenticated(request)) {
           return json({ error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request);
+        if (adminCheck) return adminCheck;
         let body: { mode?: unknown }
         try {
           body = (await request.json()) as { mode?: unknown }

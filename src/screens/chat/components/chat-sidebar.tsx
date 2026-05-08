@@ -134,6 +134,9 @@ type ChatSidebarProps = {
   sessionsFetching: boolean
   sessionsError: string | null
   onRetrySessions: () => void
+  /** In multi-user mode, only admin users see admin-only nav items */
+  isAdmin?: boolean
+  multiUser?: boolean
 }
 
 // ── Reusable nav item ───────────────────────────────────────────────────
@@ -527,6 +530,8 @@ function ChatSidebarComponent({
   sessionsFetching,
   sessionsError,
   onRetrySessions,
+  isAdmin = true,
+  multiUser = false,
 }: ChatSidebarProps) {
   const { settingsOpen, settingsSection, setSettingsOpen, handleOpenSettings } =
     useSidebarSettings()
@@ -882,6 +887,16 @@ function ChatSidebarComponent({
 
   const systemItems: Array<NavItemDef> = []
 
+  // In multi-user mode, hide admin-only nav items from regular users
+  const hideAdminItems = multiUser && !isAdmin
+  const adminOnlyRoutes = new Set(['/terminal', '/conductor', '/swarm', '/profiles'])
+  const visibleMainItems = hideAdminItems
+    ? mainItems.filter((item) => !adminOnlyRoutes.has(item.to ?? ''))
+    : mainItems
+  const visibleKnowledgeItems = hideAdminItems
+    ? knowledgeItems.filter((item) => !adminOnlyRoutes.has(item.to ?? ''))
+    : knowledgeItems
+
   return (
     <motion.aside
       ref={(node) => {
@@ -1087,7 +1102,7 @@ function ChatSidebarComponent({
           />
           <CollapsibleSection
             expanded={mainExpanded || isCollapsed}
-            items={mainItems}
+            items={visibleMainItems}
             isCollapsed={isVisuallyCollapsed}
             transition={transition}
             onSelectSession={onSelectSession}
@@ -1104,7 +1119,7 @@ function ChatSidebarComponent({
           />
           <CollapsibleSection
             expanded={knowledgeExpanded || isCollapsed}
-            items={knowledgeItems}
+            items={visibleKnowledgeItems}
             isCollapsed={isVisuallyCollapsed}
             transition={transition}
             onSelectSession={onSelectSession}

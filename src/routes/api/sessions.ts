@@ -20,12 +20,15 @@ import {
   listLocalSessions,
   updateLocalSessionTitle,
 } from '../../server/local-session-store'
+import { getUser, getUserContext } from '../../server/request-context'
+import { claimBeforeCreate, isSessionOwnedByUser, listOwnedSessions } from '../../server/session-helpers'
+import { getAuthMode } from '../../server/auth-middleware'
+import { releaseSessionOwnership } from '../../server/session-ownership-store'
 
 export const Route = createFileRoute('/api/sessions')({
   server: {
     handlers: {
       GET: async ({ request }) => {
-        // Auth check
         if (!isAuthenticated(request)) {
           return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
@@ -40,11 +43,22 @@ export const Route = createFileRoute('/api/sessions')({
         }
 
         try {
-          const sessions = await listSessions(50, 0)
-          const gatewaySessions = sessions.map(toSessionSummary)
+          const user = getUser(request)
+          const userCtx = getUserContext(request)
+          const authMode = getAuthMode()
 
-          // Merge local portable sessions (Ollama, Atomic Chat, etc.)
-          const localSessions = listLocalSessions()
+          let gatewaySessions: ReturnType<typeof toSessionSummary>[]
+
+          if (authMode === 'multi-user' && user && user.id !== 'legacy' && user.id !== 'anonymous') {
+            // Multi-user: only list sessions owned by this user
+            gatewaySessions = await listOwnedSessions(user)
+          } else {
+            const sessions = await listSessions(50, 0)
+            gatewaySessions = sessions.map(toSessionSummary)
+          }
+
+          // Merge local portable sessions
+          const localSessions = listLocalSessions(userCtx)
           const gatewayIds = new Set(gatewaySessions.map((s: any) => s.key || s.id))
           for (const ls of localSessions) {
             if (!gatewayIds.has(ls.id)) {
@@ -81,8 +95,13 @@ export const Route = createFileRoute('/api/sessions')({
         const csrfCheckPost = requireJsonContentType(request)
         if (csrfCheckPost) return csrfCheckPost
         const capabilities = await ensureGatewayProbed()
+        const user = getUser(request)
+        const authMode = getAuthMode()
+
         if (!capabilities.sessions) {
           const friendlyId = randomUUID()
+          // Claim ownership for multi-user mode
+          if (user) claimBeforeCreate(user, friendlyId)
           return json({
             ...createCapabilityUnavailablePayload('sessions'),
             ok: true,
@@ -103,13 +122,21 @@ export const Route = createFileRoute('/api/sessions')({
 
           const requestedFriendlyId =
             typeof body.friendlyId === 'string' ? body.friendlyId.trim() : ''
-          const friendlyId = requestedFriendlyId || randomUUID()
+          // In multi-user mode, durable session keys must come from the
+          // backend or a server-generated UUID. Trusting client-selected ids
+          // lets one user claim another user's existing session key.
+          const friendlyId =
+            authMode === 'multi-user'
+              ? randomUUID()
+              : requestedFriendlyId || randomUUID()
 
           const requestedModel =
             typeof body.model === 'string' ? body.model.trim() : ''
           const model = requestedModel || undefined
 
           if (capabilities.dashboard.available && !capabilities.enhancedChat) {
+            // Claim ownership
+            if (user) claimBeforeCreate(user, friendlyId)
             return json({
               ok: true,
               sessionKey: friendlyId,
@@ -132,10 +159,13 @@ export const Route = createFileRoute('/api/sessions')({
           }
 
           const session = await createSession({
-            id: friendlyId || randomUUID(),
+            ...(authMode === 'multi-user' ? {} : { id: friendlyId || randomUUID() }),
             title: label,
             model,
           })
+
+          // Claim ownership
+          if (user) claimBeforeCreate(user, session.id)
 
           return json({
             ok: true,
@@ -161,6 +191,8 @@ export const Route = createFileRoute('/api/sessions')({
         const csrfCheckPatch = requireJsonContentType(request)
         if (csrfCheckPatch) return csrfCheckPatch
         const capabilities = await ensureGatewayProbed()
+        const user = getUser(request)
+
         if (!capabilities.sessions) {
           const body = (await request.json().catch(() => ({}))) as Record<
             string,
@@ -171,6 +203,11 @@ export const Route = createFileRoute('/api/sessions')({
           const rawFriendlyId =
             typeof body.friendlyId === 'string' ? body.friendlyId.trim() : ''
           const sessionKey = rawSessionKey || rawFriendlyId || randomUUID()
+
+          // Check ownership
+          if (!isSessionOwnedByUser(user, sessionKey)) {
+            return json({ ok: false, error: 'Not found' }, { status: 404 })
+          }
 
           return json({
             ...createCapabilityUnavailablePayload('sessions'),
@@ -201,9 +238,12 @@ export const Route = createFileRoute('/api/sessions')({
             )
           }
 
-          const localSession = getLocalSession(sessionKey)
+          const localSession = getLocalSession(sessionKey, getUserContext(request))
           if (localSession) {
-            if (label) updateLocalSessionTitle(sessionKey, label)
+            if (!isSessionOwnedByUser(user, sessionKey)) {
+              return json({ ok: false, error: 'Not found' }, { status: 404 })
+            }
+            if (label) updateLocalSessionTitle(sessionKey, label, getUserContext(request))
             return json({
               ok: true,
               sessionKey,
@@ -223,6 +263,10 @@ export const Route = createFileRoute('/api/sessions')({
               updated: true,
               source: 'local',
             })
+          }
+
+          if (!isSessionOwnedByUser(user, sessionKey)) {
+            return json({ ok: false, error: 'Not found' }, { status: 404 })
           }
 
           if (capabilities.dashboard.available && !capabilities.enhancedChat) {
@@ -276,15 +320,24 @@ export const Route = createFileRoute('/api/sessions')({
           )
         }
 
-        // Local sessions live in the workspace portable store, not the
-        // gateway. Delete them locally without hitting the gateway.
-        if (getLocalSession(sessionKey)) {
-          deleteLocalSession(sessionKey)
+        const user = getUser(request)
+
+        // Check ownership
+        if (!isSessionOwnedByUser(user, sessionKey)) {
+          return json({ ok: false, error: 'Not found' }, { status: 404 })
+        }
+
+        // Local sessions live in the workspace portable store
+        const userCtx = getUserContext(request)
+        if (getLocalSession(sessionKey, userCtx)) {
+          deleteLocalSession(sessionKey, userCtx)
+          if (user) releaseSessionOwnership(user.id, sessionKey)
           return json({ ok: true, sessionKey, source: 'local' })
         }
 
         const capabilities = await ensureGatewayProbed()
         if (!capabilities.sessions) {
+          if (user) releaseSessionOwnership(user.id, sessionKey)
           return json({
             ...createCapabilityUnavailablePayload('sessions'),
             ok: true,
@@ -294,6 +347,7 @@ export const Route = createFileRoute('/api/sessions')({
         }
         try {
           await deleteSession(sessionKey)
+          if (user) releaseSessionOwnership(user.id, sessionKey)
 
           return json({ ok: true, sessionKey })
         } catch (err) {

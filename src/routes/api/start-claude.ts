@@ -1,6 +1,7 @@
 import { json } from '@tanstack/react-start'
 import { createFileRoute } from '@tanstack/react-router'
 import { isAuthenticated } from '../../server/auth-middleware'
+import { requireAdmin } from '../../server/admin-gate'
 import { startClaudeAgent } from '../../server/claude-agent'
 
 export const Route = createFileRoute('/api/start-claude')({
@@ -11,6 +12,9 @@ export const Route = createFileRoute('/api/start-claude')({
           if (!isAuthenticated(request)) {
             return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
           }
+
+          const adminCheck = requireAdmin(request)
+          if (adminCheck) return adminCheck
 
           const result = await startClaudeAgent()
           return json(result, { status: result.ok ? 200 : 500 })

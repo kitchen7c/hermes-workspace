@@ -4,12 +4,12 @@ import { dirname, resolve } from 'node:path'
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import { isAuthenticated } from '../../server/auth-middleware'
+import { requireAdmin } from '../../server/admin-gate'
 import { requireJsonContentType } from '../../server/rate-limit'
-import {
-  dashboardFetch,
-  ensureGatewayProbed,
-} from '../../server/gateway-capabilities'
+import { dashboardFetch, ensureGatewayProbed } from '../../server/gateway-capabilities'
 import { sanitizeConductorMissionGoal } from '../../server/conductor-mission-sanitize'
+import { getUser } from '../../server/request-context'
+import { claimBeforeCreate } from '../../server/session-helpers'
 
 let cachedSkill: string | null = null
 
@@ -164,8 +164,9 @@ export const Route = createFileRoute('/api/conductor-spawn')({
   server: {
     handlers: {
       GET: async ({ request }) => {
-        if (!isAuthenticated(request))
-          return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+        if (!isAuthenticated(request)) return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+        const adminCheck = requireAdmin(request)
+        if (adminCheck) return adminCheck
         const url = new URL(request.url)
         const missionId = url.searchParams.get('missionId')?.trim()
         const requestedLines = Number(url.searchParams.get('lines') || '200')
@@ -215,8 +216,9 @@ export const Route = createFileRoute('/api/conductor-spawn')({
         return json({ ok: true, mission })
       },
       POST: async ({ request }) => {
-        if (!isAuthenticated(request))
-          return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+        if (!isAuthenticated(request)) return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+        const adminCheck = requireAdmin(request)
+        if (adminCheck) return adminCheck
         const csrfCheck = requireJsonContentType(request)
         if (csrfCheck) return csrfCheck
 
@@ -253,8 +255,10 @@ export const Route = createFileRoute('/api/conductor-spawn')({
           })
           const missionName = `conductor-${Date.now()}`
           const capabilities = await ensureGatewayProbed()
+          const user = getUser(request)
 
           if (!capabilities.conductor) {
+            if (user) claimBeforeCreate(user, missionName)
             return json({
               ok: true,
               mode: 'portable',
@@ -269,12 +273,11 @@ export const Route = createFileRoute('/api/conductor-spawn')({
             })
           }
 
-          const result = await createDashboardConductorMission({
-            name: missionName,
-            prompt,
-          })
-          if (result.error)
-            return json({ ok: false, error: result.error }, { status: 502 })
+          const result = await createDashboardConductorMission({ name: missionName, prompt })
+          if (result.error) return json({ ok: false, error: result.error }, { status: 502 })
+          if (user && result.sessionKey) {
+            claimBeforeCreate(user, result.sessionKey)
+          }
           const missionId = result.id ?? missionName
           return json({
             ok: true,

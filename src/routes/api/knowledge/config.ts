@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import { isAuthenticated } from '../../../server/auth-middleware'
+import { requireAdmin } from '../../../server/admin-gate'
 import {
   readKnowledgeBaseConfig,
   writeKnowledgeBaseConfig,
@@ -32,6 +33,8 @@ export const Route = createFileRoute('/api/knowledge/config')({
         if (!isAuthenticated(request)) {
           return json({ error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request)
+        if (adminCheck) return adminCheck
         try {
           const body = (await request.json()) as Partial<KnowledgeBaseConfig>
           const current = readKnowledgeBaseConfig()

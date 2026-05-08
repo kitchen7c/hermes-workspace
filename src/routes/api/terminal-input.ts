@@ -6,12 +6,24 @@ import {
   requireJsonContentType,
 } from '../../server/rate-limit'
 import { getTerminalSession } from '../../server/terminal-sessions'
-import { requireLocalOrAuth } from '../../server/auth-middleware'
+import { requireLocalOrAuth, getAuthMode } from '../../server/auth-middleware'
+import { getUser } from '../../server/request-context'
 
 export const Route = createFileRoute('/api/terminal-input')({
   server: {
     handlers: {
       POST: async ({ request }) => {
+        // In multi-user mode, terminal is admin-only
+        if (getAuthMode() === 'multi-user') {
+          const user = getUser(request)
+          if (!user || user.role !== 'admin') {
+            return new Response(
+              JSON.stringify({ ok: false, error: 'Forbidden: admin only' }),
+              { status: 403, headers: { 'Content-Type': 'application/json' } },
+            )
+          }
+        }
+
         // Match terminal-stream semantics: local browser clients should be
         // allowed even without an explicit auth cookie.
         if (!requireLocalOrAuth(request)) {

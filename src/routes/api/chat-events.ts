@@ -1,5 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { isAuthenticated } from '../../server/auth-middleware'
+import { isAuthenticated, getAuthMode } from '../../server/auth-middleware'
+import { getUser } from '../../server/request-context'
+import { isSessionOwnedByUser } from '../../server/session-helpers'
 import {
   ensureBusStarted,
   subscribeToChatEvents,
@@ -26,6 +28,35 @@ export const Route = createFileRoute('/api/chat-events')({
         const url = new URL(request.url)
         const sessionKeyParam =
           url.searchParams.get('sessionKey')?.trim() || undefined
+
+        // In multi-user mode, a sessionKey filter is REQUIRED to prevent
+        // leaking live chat events across user boundaries. Without it, a
+        // regular user could subscribe globally and receive all events.
+        const user = getUser(request)
+        if (getAuthMode() === 'multi-user') {
+          if (!sessionKeyParam) {
+            if (user?.role !== 'admin') {
+              return new Response(
+                JSON.stringify({ ok: false, error: 'sessionKey required in multi-user mode' }),
+                { status: 400, headers: { 'Content-Type': 'application/json' } },
+              )
+            }
+          }
+          if (sessionKeyParam && !isSessionOwnedByUser(user, sessionKeyParam)) {
+            return new Response(
+              JSON.stringify({ ok: false, error: 'Not found' }),
+              { status: 404, headers: { 'Content-Type': 'application/json' } },
+            )
+          }
+        } else if (sessionKeyParam) {
+          // Legacy mode: only check ownership if filter is specified
+          if (!isSessionOwnedByUser(user, sessionKeyParam)) {
+            return new Response(
+              JSON.stringify({ ok: false, error: 'Not found' }),
+              { status: 404, headers: { 'Content-Type': 'application/json' } },
+            )
+          }
+        }
 
         const encoder = new TextEncoder()
         let streamClosed = false

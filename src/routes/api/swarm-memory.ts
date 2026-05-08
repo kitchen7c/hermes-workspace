@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
-import { isAuthenticated } from '../../server/auth-middleware'
+import { isAuthenticated } from '../../server/auth-middleware';
+import { requireAdmin } from '../../server/admin-gate';
 import {
   appendSwarmMemoryEvent,
   ensureWorkerMemoryScaffold,
@@ -62,6 +63,8 @@ export const Route = createFileRoute('/api/swarm-memory')({
         if (!isAuthenticated(request)) {
           return json({ error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request);
+        if (adminCheck) return adminCheck;
         const url = new URL(request.url)
         const workerId = url.searchParams.get('workerId')
         const kind = asKind(url.searchParams.get('kind'))
@@ -77,6 +80,8 @@ export const Route = createFileRoute('/api/swarm-memory')({
         if (!isAuthenticated(request)) {
           return json({ error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request);
+        if (adminCheck) return adminCheck;
 
         let body: SwarmMemoryPostBody
         try {

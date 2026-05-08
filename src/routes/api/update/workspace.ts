@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import { isAuthenticated } from '../../../server/auth-middleware'
+import { requireAdmin } from '../../../server/admin-gate'
 import {
   getClientIp,
   rateLimit,
@@ -16,6 +17,8 @@ export const Route = createFileRoute('/api/update/workspace')({
         if (!isAuthenticated(request)) {
           return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request)
+        if (adminCheck) return adminCheck
         const csrfCheck = requireJsonContentType(request)
         if (csrfCheck) return csrfCheck
         if (!rateLimit(`update-workspace:${getClientIp(request)}`, 3, 60_000)) {

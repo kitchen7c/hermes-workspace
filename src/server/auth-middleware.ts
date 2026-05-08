@@ -8,6 +8,25 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { hasAnyUser } from './user-store'
+
+// Trigger one-time migration on first import
+let _migrationRun = false
+function ensureMigration(): void {
+  if (_migrationRun) return
+  _migrationRun = true
+  // Skip migration during test runs — module imports should not
+  // have filesystem side effects. Migration only runs at server start.
+  if (process.env.VITEST || process.env.NODE_ENV === 'test') return
+  // Lazy import to avoid circular dependency on boot
+  import('./multi-user-migration').then(({ runMultiUserMigration }) => {
+    runMultiUserMigration().catch((err) => {
+      console.error('[auth] Migration failed:', err)
+    })
+  })
+}
+// Run migration on module load (skipped in test environments)
+ensureMigration()
 
 /**
  * Persistent session token store.
@@ -18,15 +37,26 @@ import { dirname, join } from 'node:path'
  * window — in that case replace with Redis or a database.
  *
  * File location: ~/.hermes/workspace-sessions.json
+ *
+ * Token format (multi-user):
+ *   tokens: { "<token>": { userId: "uuid", expiry: 1715000000000 } }
+ *
+ * Token format (legacy):
+ *   tokens: { "<token>": 1715000000000 }
  */
-interface SessionStore {
-  tokens: Record<string, number> // token -> expiry unix-ms
+interface TokenEntry {
+  userId: string
+  expiry: number
 }
 
-const STORE_FILE = join(
-  process.env.HERMES_HOME ?? process.env.CLAUDE_HOME ?? join(homedir(), '.hermes'),
-  'workspace-sessions.json',
-)
+interface SessionStore {
+  tokens: Record<string, number | TokenEntry>
+}
+
+const HERMES_HOME =
+  process.env.HERMES_HOME ?? process.env.CLAUDE_HOME ?? join(homedir(), '.hermes')
+
+const STORE_FILE = join(HERMES_HOME, 'workspace-sessions.json')
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
 
 function loadStore(): SessionStore {
@@ -36,9 +66,10 @@ function loadStore(): SessionStore {
       const parsed = JSON.parse(raw) as SessionStore
       // Expire any stale tokens on load
       const now = Date.now()
-      const valid: Record<string, number> = {}
-      for (const [token, expiry] of Object.entries(parsed.tokens)) {
-        if (expiry > now) valid[token] = expiry
+      const valid: Record<string, number | TokenEntry> = {}
+      for (const [token, value] of Object.entries(parsed.tokens)) {
+        const expiry = typeof value === 'number' ? value : value.expiry
+        if (expiry > now) valid[token] = value
       }
       return { tokens: valid }
     }
@@ -54,37 +85,39 @@ function saveStore(store: SessionStore): void {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true, mode: 0o700 })
     }
-    // Write with restrictive permissions — tokens are sensitive.
     writeFileSync(STORE_FILE, JSON.stringify(store), { encoding: 'utf8', mode: 0o600 })
-    // Enforce 0600 even if the file already existed with looser perms.
     try {
       chmodSync(STORE_FILE, 0o600)
     } catch {
-      // chmod is best-effort (e.g. Windows) — ignore failures.
+      // chmod is best-effort (e.g. Windows)
     }
   } catch {
-    // Non-fatal — tokens are still in memory.
     console.warn(`[auth] Failed to persist session store to ${STORE_FILE}`)
   }
 }
 
-// In-memory working copy
-const _tokens: Map<string, number> = new Map()
+// In-memory working copy: token -> { userId, expiry }
+interface TokenRecord {
+  userId: string | null // null for legacy tokens (no userId)
+  expiry: number
+}
+const _tokens: Map<string, TokenRecord> = new Map()
 
 // Hydrate from disk on module load
 const initial = loadStore()
-for (const [token, expiry] of Object.entries(initial.tokens)) {
-  _tokens.set(token, expiry)
+for (const [token, value] of Object.entries(initial.tokens)) {
+  if (typeof value === 'number') {
+    _tokens.set(token, { userId: null, expiry: value })
+  } else {
+    _tokens.set(token, { userId: value.userId, expiry: value.expiry })
+  }
 }
 
-/**
- * Prune expired tokens from the store (called on every write + a periodic sweep).
- */
 function _prune(): void {
   const now = Date.now()
   let changed = false
-  for (const [token, expiry] of _tokens) {
-    if (expiry <= now) {
+  for (const [token, record] of _tokens) {
+    if (record.expiry <= now) {
       _tokens.delete(token)
       changed = true
     }
@@ -93,8 +126,15 @@ function _prune(): void {
 }
 
 function _persist(): void {
-  const store: SessionStore = { tokens: Object.fromEntries(_tokens) }
-  saveStore(store)
+  const tokens: Record<string, number | TokenEntry> = {}
+  for (const [token, record] of _tokens) {
+    if (record.userId) {
+      tokens[token] = { userId: record.userId, expiry: record.expiry }
+    } else {
+      tokens[token] = record.expiry
+    }
+  }
+  saveStore({ tokens })
 }
 
 // Sweep expired tokens every 10 minutes
@@ -108,10 +148,18 @@ export function generateSessionToken(): string {
 }
 
 /**
- * Store a session token as valid (30-day TTL).
+ * Store a session token with a userId (multi-user mode).
+ */
+export function storeUserSessionToken(token: string, userId: string): void {
+  _tokens.set(token, { userId, expiry: Date.now() + TOKEN_TTL_MS })
+  _persist()
+}
+
+/**
+ * Store a session token (legacy mode — no userId).
  */
 export function storeSessionToken(token: string): void {
-  _tokens.set(token, Date.now() + TOKEN_TTL_MS)
+  _tokens.set(token, { userId: null, expiry: Date.now() + TOKEN_TTL_MS })
   _persist()
 }
 
@@ -119,9 +167,9 @@ export function storeSessionToken(token: string): void {
  * Check if a session token is valid and not expired.
  */
 export function isValidSessionToken(token: string): boolean {
-  const expiry = _tokens.get(token)
-  if (expiry === undefined) return false
-  if (expiry <= Date.now()) {
+  const record = _tokens.get(token)
+  if (!record) return false
+  if (record.expiry <= Date.now()) {
     _tokens.delete(token)
     _persist()
     return false
@@ -138,10 +186,59 @@ export function revokeSessionToken(token: string): void {
 }
 
 /**
- * Resolve the configured workspace password.
- *
- * Honors HERMES_PASSWORD first (current name, post-rename) and falls back to
- * CLAUDE_PASSWORD for back-compat with deployments configured pre-rename.
+ * Revoke all tokens for a given user.
+ */
+export function revokeAllUserTokens(userId: string): void {
+  let changed = false
+  for (const [token, record] of _tokens) {
+    if (record.userId === userId) {
+      _tokens.delete(token)
+      changed = true
+    }
+  }
+  if (changed) _persist()
+}
+
+/**
+ * Get the userId associated with a token, if any.
+ * Returns null for legacy tokens (no userId) or invalid tokens.
+ */
+function getUserIdForToken(token: string): string | null {
+  const record = _tokens.get(token)
+  if (!record) return null
+  if (record.expiry <= Date.now()) {
+    _tokens.delete(token)
+    _persist()
+    return null
+  }
+  return record.userId
+}
+
+/**
+ * Extract the userId from the session token in the request.
+ * Returns null if multi-user mode is not active or the token is invalid.
+ */
+export function getUserIdFromToken(request: Request): string | null {
+  // Only resolve userIds in multi-user mode
+  if (!hasAnyUser()) return null
+
+  const cookieHeader = request.headers.get('cookie')
+  const token = getSessionTokenFromCookie(cookieHeader)
+  if (!token) return null
+
+  return getUserIdForToken(token)
+}
+
+/**
+ * Check if a session token is a legacy token (no userId).
+ */
+export function isLegacyToken(token: string): boolean {
+  const record = _tokens.get(token)
+  return record !== undefined && record.userId === null
+}
+
+/**
+ * Resolve the configured workspace password for legacy mode.
  */
 function getConfiguredPassword(): string {
   const fromHermes = process.env.HERMES_PASSWORD
@@ -152,14 +249,14 @@ function getConfiguredPassword(): string {
 }
 
 /**
- * Check if password protection is enabled.
+ * Check if password protection is enabled (legacy or multi-user).
  */
 export function isPasswordProtectionEnabled(): boolean {
-  return getConfiguredPassword().length > 0
+  return getConfiguredPassword().length > 0 || hasAnyUser()
 }
 
 /**
- * Verify password using timing-safe comparison.
+ * Verify legacy password using timing-safe comparison.
  */
 export function verifyPassword(password: string): boolean {
   const configured = getConfiguredPassword()
@@ -167,11 +264,9 @@ export function verifyPassword(password: string): boolean {
     return false
   }
 
-  // Timing-safe comparison
   const passwordBuf = Buffer.from(password, 'utf8')
   const configuredBuf = Buffer.from(configured, 'utf8')
 
-  // If lengths differ, still do a comparison to avoid timing leak
   if (passwordBuf.length !== configuredBuf.length) {
     return false
   }
@@ -200,23 +295,11 @@ export function getSessionTokenFromCookie(
   return null
 }
 
-/**
- * Whether the workspace is configured to trust proxy-forwarded headers
- * (`x-forwarded-for`, `x-real-ip`). Off by default — enabled explicitly when
- * deployed behind a trusted reverse proxy (Traefik, Nginx, Cloudflare).
- * See #125.
- */
 function isTrustedProxyEnabled(): boolean {
   const v = (process.env.TRUST_PROXY || '').trim().toLowerCase()
   return v === '1' || v === 'true' || v === 'yes'
 }
 
-/**
- * Best-effort extraction of the peer IP, preferring the actual socket
- * address when available. Forwarded headers are only honored when
- * TRUST_PROXY is set — otherwise a client-controlled `x-forwarded-for`
- * could spoof local classification (#125).
- */
 export function getRequestIp(request: Request): string {
   if (isTrustedProxyEnabled()) {
     const forwarded = request.headers.get('x-forwarded-for')
@@ -225,10 +308,6 @@ export function getRequestIp(request: Request): string {
     const real = request.headers.get('x-real-ip')?.trim()
     if (real) return real
   }
-  // Node's Request does not expose the socket; the adapter that constructs it
-  // (TanStack Start / undici) may attach `remoteAddress` under a well-known
-  // symbol. Fall back to loopback when nothing is available so we fail *safe*
-  // (no LAN/Tailscale bypass for unknown peers).
   const maybeAddress = (request as unknown as { remoteAddress?: string })
     .remoteAddress
   return (maybeAddress && maybeAddress.trim()) || '127.0.0.1'
@@ -238,7 +317,6 @@ function isLocalRequest(request: Request): boolean {
   const ip = getRequestIp(request)
   const localIPs = ['127.0.0.1', '::1', 'localhost', '::ffff:127.0.0.1']
   if (localIPs.includes(ip)) return true
-  // Allow Tailscale (100.x.x.x) and private LAN ranges
   if (/^100\.\d+\.\d+\.\d+$/.test(ip)) return true
   if (/^192\.168\./.test(ip)) return true
   if (/^10\./.test(ip)) return true
@@ -247,25 +325,35 @@ function isLocalRequest(request: Request): boolean {
 
 /**
  * Check if the request is authenticated.
- * Returns true if:
- * - Password protection is disabled, OR
- * - Request has a valid session token
+ *
+ * In multi-user mode: checks if the token is valid and has an associated userId.
+ * In legacy mode: checks the token against the configured password.
+ * In no-auth mode: always returns true.
  */
 export function isAuthenticated(request: Request): boolean {
-  // No password configured? No auth needed
-  if (!isPasswordProtectionEnabled()) {
+  // Multi-user mode: check for valid token with a userId
+  if (hasAnyUser()) {
+    const cookieHeader = request.headers.get('cookie')
+    const token = getSessionTokenFromCookie(cookieHeader)
+    if (!token) return false
+    if (!isValidSessionToken(token)) return false
+    // In multi-user mode, legacy tokens (no userId) should NOT grant access
+    // unless they've been migrated. But we need backward compat during migration.
+    const userId = getUserIdForToken(token)
+    if (!userId) return false
     return true
   }
 
-  // Check for valid session token
-  const cookieHeader = request.headers.get('cookie')
-  const token = getSessionTokenFromCookie(cookieHeader)
-
-  if (!token) {
-    return false
+  // Legacy password mode
+  if (isPasswordProtectionEnabled()) {
+    const cookieHeader = request.headers.get('cookie')
+    const token = getSessionTokenFromCookie(cookieHeader)
+    if (!token) return false
+    return isValidSessionToken(token)
   }
 
-  return isValidSessionToken(token)
+  // No-auth mode
+  return true
 }
 
 export function requireLocalOrAuth(request: Request): boolean {
@@ -276,13 +364,6 @@ export function requireLocalOrAuth(request: Request): boolean {
   return isAuthenticated(request)
 }
 
-/**
- * Whether session cookies should set the `Secure` attribute.
- *
- * Defaults ON in production, OFF in development (so localhost-over-HTTP
- * login flows still work). Operators can override with
- * `COOKIE_SECURE=0` (force off) or `COOKIE_SECURE=1` (force on). See #123.
- */
 function shouldSetSecureCookie(): boolean {
   const override = (process.env.COOKIE_SECURE || '').trim().toLowerCase()
   if (override === '1' || override === 'true' || override === 'yes') return true
@@ -292,17 +373,21 @@ function shouldSetSecureCookie(): boolean {
 
 /**
  * Create a Set-Cookie header for the session token.
- *
- * Attributes:
- *   - HttpOnly    — blocks JS access, mitigates XSS session theft
- *   - Secure      — HTTPS only (production default, overridable)
- *   - SameSite=Strict — CSRF protection
- *   - Path=/      — available across the whole app
- *   - Max-Age     — 30 days
  */
 export function createSessionCookie(token: string): string {
   const attrs = ['HttpOnly']
   if (shouldSetSecureCookie()) attrs.push('Secure')
   attrs.push('SameSite=Strict', 'Path=/', `Max-Age=${30 * 24 * 60 * 60}`)
   return `claude-auth=${token}; ${attrs.join('; ')}`
+}
+
+/**
+ * Get the auth mode for the current deployment.
+ */
+export type AuthMode = 'multi-user' | 'legacy-password' | 'no-auth'
+
+export function getAuthMode(): AuthMode {
+  if (hasAnyUser()) return 'multi-user'
+  if (getConfiguredPassword().length > 0) return 'legacy-password'
+  return 'no-auth'
 }

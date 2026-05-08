@@ -4,7 +4,8 @@ import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { isAuthenticated } from '../../server/auth-middleware'
+import { isAuthenticated } from '../../server/auth-middleware';
+import { requireAdmin } from '../../server/admin-gate';
 import {
   getSwarmProfilePath,
   patchSwarmRuntimeFile,
@@ -81,6 +82,8 @@ export const Route = createFileRoute('/api/swarm-tmux-stop')({
         if (!isAuthenticated(request)) {
           return json({ error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request);
+        if (adminCheck) return adminCheck;
 
         let body: StopRequest
         try {

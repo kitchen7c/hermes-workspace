@@ -13,8 +13,10 @@ import {
   getMessages,
   toChatMessage,
 } from '../../server/claude-api'
-import { resolveSessionKey } from '../../server/session-utils'
-import { isAuthenticated } from '@/server/auth-middleware'
+import { resolveSessionKey, resolveMainForUser } from '../../server/session-utils'
+import { isAuthenticated } from '../../server/auth-middleware';
+import { getUser, getUserContext } from '../../server/request-context'
+import { isSessionOwnedByUser } from '../../server/session-helpers'
 import {
   getLocalMessages,
   getLocalSession,
@@ -29,7 +31,7 @@ export const Route = createFileRoute('/api/session-history')({
         }
         await ensureGatewayProbed()
         const url = new URL(request.url)
-        const key =
+        let key =
           url.searchParams.get('key')?.trim() ||
           url.searchParams.get('sessionKey')?.trim() ||
           ''
@@ -38,10 +40,28 @@ export const Route = createFileRoute('/api/session-history')({
         if (!key) {
           return json({ ok: false, messages: [], error: 'key is required' })
         }
+
+        // Resolve 'main' against the current user BEFORE ownership check.
+        // Otherwise 'main' fails the check because it's not a real session key.
+        const user = getUser(request)
+        if (key === 'main') {
+          key = await resolveMainForUser(user)
+        }
+
+        // 'new' has no history
+        if (key === 'new') {
+          return json({ ok: true, messages: [], sessionKey: 'new', source: 'gateway' })
+        }
+
+        // Check session ownership on the resolved key
+        if (!isSessionOwnedByUser(user, key)) {
+          return json({ ok: false, error: 'Not found' }, { status: 404 })
+        }
+
         // Try local store first (in-memory sessions)
-        const local = getLocalSession(key)
+        const local = getLocalSession(key, getUserContext(request))
         if (local) {
-          const messages = getLocalMessages(key).slice(-limit)
+          const messages = getLocalMessages(key, getUserContext(request)).slice(-limit)
           return json({ ok: true, messages, sessionKey: key, source: 'local' })
         }
         if (!getGatewayCapabilities().sessions) {
@@ -53,17 +73,13 @@ export const Route = createFileRoute('/api/session-history')({
           })
         }
         try {
-          const resolved = await resolveSessionKey({
-            rawSessionKey: key,
-            defaultKey: 'main',
-          })
           void includeTools
-          const rows = await getMessages(resolved.sessionKey)
+          const rows = await getMessages(key)
           const trimmed = rows.slice(-limit)
           return json({
             ok: true,
             messages: trimmed.map((row) => toChatMessage(row)),
-            sessionKey: resolved.sessionKey,
+            sessionKey: key,
             source: 'gateway',
           })
         } catch (error) {

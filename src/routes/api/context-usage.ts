@@ -1,7 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
-import { isAuthenticated } from '@/server/auth-middleware'
-import { readContextUsage } from '@/server/context-usage'
+import { getAuthMode, isAuthenticated } from '../../server/auth-middleware'
+import {
+  emptyContextUsageSnapshot,
+  readContextUsage,
+} from '@/server/context-usage'
+import { getUser } from '../../server/request-context'
+import { isSessionOwnedByUser } from '../../server/session-helpers'
 
 export const Route = createFileRoute('/api/context-usage')({
   server: {
@@ -18,17 +23,17 @@ export const Route = createFileRoute('/api/context-usage')({
           ''
 
         if (sessionId === 'new' || sessionId === 'main') {
-          return json({
-            ok: true,
-            contextPercent: 0,
-            maxTokens: 0,
-            usedTokens: 0,
-            model: '',
-            staticTokens: 0,
-            conversationTokens: 0,
-          })
+          return json(emptyContextUsageSnapshot())
         }
-
+        if (getAuthMode() === 'multi-user') {
+          if (!sessionId) {
+            return json(emptyContextUsageSnapshot())
+          }
+          const user = getUser(request)
+          if (!isSessionOwnedByUser(user, sessionId)) {
+            return json({ ok: false, error: 'Not found' }, { status: 404 })
+          }
+        }
         const snapshot = await readContextUsage(sessionId)
         return json(snapshot)
       },

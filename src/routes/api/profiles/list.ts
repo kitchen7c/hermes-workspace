@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import { isAuthenticated } from '../../../server/auth-middleware'
+import { requireAdmin } from '../../../server/admin-gate'
 import {
   getActiveProfileName,
   listProfiles,
@@ -13,6 +14,8 @@ export const Route = createFileRoute('/api/profiles/list')({
         if (!isAuthenticated(request)) {
           return json({ error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request)
+        if (adminCheck) return adminCheck
         try {
           return json({
             profiles: listProfiles(),

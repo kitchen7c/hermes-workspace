@@ -122,6 +122,12 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
   const handleStartupConnected = useCallback((status: AuthStatus) => {
     setAuthStatus(status)
     setConnectionVerified(true)
+    // Set global user ID for namespaced storage
+    if (status.multiUser && status.user?.id) {
+      window.__hermes_userId = status.user.id
+    } else {
+      delete window.__hermes_userId
+    }
   }, [])
 
   // Fallback startup verification in the shell itself.
@@ -137,6 +143,11 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
         if (cancelled) return
         setAuthStatus(status)
         setConnectionVerified(true)
+        if (status.multiUser && status.user?.id) {
+          window.__hermes_userId = status.user.id
+        } else {
+          delete window.__hermes_userId
+        }
         return
       } catch {
         // Fall through to connection-status as a looser readiness signal.
@@ -187,6 +198,9 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
   const activeFriendlyId = chatMatch ? chatMatch[1] : 'main'
   const isOnChatRoute = Boolean(chatMatch) || pathname === '/new'
   const isOnTerminalRoute = pathname.startsWith('/terminal')
+  // In multi-user mode, non-admin users cannot access terminal
+  const canAccessTerminal = !authStatus?.multiUser || authStatus?.user?.role === 'admin'
+  const effectiveTerminalRoute = isOnTerminalRoute && canAccessTerminal
   const isOnPlaygroundRoute = pathname === '/playground' || pathname.startsWith('/playground/')
   const isOnHermesWorldLandingRoute = pathname === '/hermes-world' || pathname.startsWith('/hermes-world/') || pathname === '/world' || pathname.startsWith('/world/')
   const isEmbeddedSurface =
@@ -362,6 +376,8 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
                 sessionsFetching={sessionsFetching}
                 sessionsError={sessionsError}
                 onRetrySessions={refetchSessions}
+                isAdmin={authStatus?.user?.role === 'admin'}
+                multiUser={authStatus?.multiUser ?? false}
               />
             </div>
           )}
@@ -391,26 +407,26 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
               style={{
                 position: 'absolute',
                 inset: 0,
-                visibility: isOnTerminalRoute ? 'visible' : 'hidden',
-                pointerEvents: isOnTerminalRoute ? 'auto' : 'none',
-                zIndex: isOnTerminalRoute ? 1 : -1,
+                visibility: effectiveTerminalRoute ? 'visible' : 'hidden',
+                pointerEvents: effectiveTerminalRoute ? 'auto' : 'none',
+                zIndex: effectiveTerminalRoute ? 1 : -1,
               }}
             >
-              {isMobile && isOnTerminalRoute && (
+              {isMobile && effectiveTerminalRoute && (
                 <MobilePageHeader title="Terminal" />
               )}
               <div className="flex-1 min-h-0 overflow-hidden">
                 <Suspense fallback={null}>
                   <TerminalWorkspace
                     mode="fullscreen"
-                    panelVisible={isOnTerminalRoute}
+                    panelVisible={effectiveTerminalRoute}
                   />
                 </Suspense>
               </div>
               {/* Mobile input bar — only mount on the terminal route.
                   It uses fixed bottom positioning, so if it stays mounted while
                   hidden it leaks onto other mobile pages like Operations. */}
-              {isMobile && isOnTerminalRoute && <MobileTerminalInput />}
+              {isMobile && effectiveTerminalRoute && <MobileTerminalInput />}
             </div>
 
             <div

@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
-import { isAuthenticated } from '../../server/auth-middleware'
+import { isAuthenticated } from '../../server/auth-middleware';
+import { requireAdmin } from '../../server/admin-gate';
 import {
   autoSweepLifecycle,
   getSwarmLifecycleStatus,
@@ -24,6 +25,8 @@ export const Route = createFileRoute('/api/swarm-lifecycle')({
     handlers: {
       GET: async ({ request }) => {
         if (!isAuthenticated(request)) return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+        const adminCheck = requireAdmin(request)
+        if (adminCheck) return adminCheck
         const url = new URL(request.url)
         const requested = validWorkerId(url.searchParams.get('workerId'))
         const ids = requested ? [requested] : listSwarmWorkerIds()
@@ -31,6 +34,8 @@ export const Route = createFileRoute('/api/swarm-lifecycle')({
       },
       POST: async ({ request }) => {
         if (!isAuthenticated(request)) return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+        const adminCheck = requireAdmin(request);
+        if (adminCheck) return adminCheck;
         let body: LifecyclePost
         try { body = await request.json() as LifecyclePost } catch { return json({ ok: false, error: 'Invalid JSON body' }, { status: 400 }) }
         const action = typeof body.action === 'string' ? body.action : ''

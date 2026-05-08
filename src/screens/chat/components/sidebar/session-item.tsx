@@ -11,6 +11,7 @@ import {
 import { memo, useMemo } from 'react'
 import { getMessageTimestamp } from '../../utils'
 import type { SessionMeta } from '../../types'
+import { namespacedLocalStorage } from '@/lib/storage'
 import { cn } from '@/lib/utils'
 import {
   MenuContent,
@@ -132,7 +133,7 @@ function SessionItemComponent({
       params={{ sessionKey: session.friendlyId }}
       onClick={() => {
         try {
-          localStorage.setItem('claude-last-session', session.friendlyId)
+          namespacedLocalStorage.setItem('last-session', session.friendlyId)
         } catch {}
         onSelect?.()
       }}

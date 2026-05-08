@@ -1,6 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
-import { isAuthenticated } from '../../server/auth-middleware'
+import { isAuthenticated, getAuthMode } from '../../server/auth-middleware'
+import { getUser } from '../../server/request-context'
+import { isSessionOwnedByUser } from '../../server/session-helpers'
 import { getToolArtifact } from '../../server/tool-artifacts-store'
 
 export const Route = createFileRoute('/api/artifacts/$artifactId')({
@@ -18,6 +20,15 @@ export const Route = createFileRoute('/api/artifacts/$artifactId')({
             { status: 404 },
           )
         }
+
+        // In multi-user mode, validate ownership of the artifact's session
+        if (getAuthMode() === 'multi-user') {
+          const user = getUser(request)
+          if (!isSessionOwnedByUser(user, artifact.sessionId)) {
+            return json({ ok: false, error: 'Not found' }, { status: 404 })
+          }
+        }
+
         return json({ ok: true, artifact })
       },
     },

@@ -6,6 +6,7 @@ import {
   reconcileSessionDraft,
 } from '../../screens/chat/chat-queries'
 import { ErrorBoundary } from '@/components/error-boundary'
+import { namespacedLocalStorage } from '@/lib/storage'
 
 const ChatScreen = lazy(async () => {
   const module = await import('../../screens/chat/chat-screen')
@@ -107,9 +108,9 @@ function ChatRoute() {
         friendlyId: payload.friendlyId,
         sessionKey: payload.sessionKey,
       })
-      // Persist last session for refresh recovery
+      // Persist last session for refresh recovery.
       try {
-        localStorage.setItem('claude-last-session', payload.friendlyId)
+        namespacedLocalStorage.setItem('last-session', payload.friendlyId)
       } catch {}
       navigate({
         to: '/chat/$sessionKey',

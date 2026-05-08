@@ -5,11 +5,12 @@ import {
   getConfig,
   getGatewayCapabilities,
   getSession,
-  listSessions,
 } from '../../server/claude-api'
-import { isSyntheticSessionKey } from '../../server/session-utils'
+import { isSyntheticSessionKey, resolveMainForUser } from '../../server/session-utils'
 import { getLocalSession } from '../../server/local-session-store'
-import { isAuthenticated } from '@/server/auth-middleware'
+import { isAuthenticated } from '../../server/auth-middleware'
+import { getUser, getUserContext } from '../../server/request-context'
+import { isSessionOwnedByUser } from '../../server/session-helpers'
 import { readContextUsage } from '@/server/context-usage'
 
 export const Route = createFileRoute('/api/session-status')({
@@ -39,8 +40,17 @@ export const Route = createFileRoute('/api/session-status')({
             })
           }
           const url = new URL(request.url)
-          const requestedKey = url.searchParams.get('sessionKey')?.trim() || ''
+          const requestedKey =
+            url.searchParams.get('sessionKey')?.trim() ||
+            url.searchParams.get('key')?.trim() ||
+            ''
           let sessionKey = requestedKey || 'new'
+
+          // Resolve 'main' against current user
+          const user = getUser(request)
+          if (sessionKey === 'main') {
+            sessionKey = await resolveMainForUser(user)
+          }
 
           if (sessionKey === 'new') {
             return json({
@@ -82,7 +92,7 @@ export const Route = createFileRoute('/api/session-status')({
             })
           }
 
-          const localSession = getLocalSession(sessionKey)
+          const localSession = getLocalSession(sessionKey, getUserContext(request))
           if (localSession) {
             const contextUsage = await readContextUsage(sessionKey)
             return json({
@@ -102,6 +112,11 @@ export const Route = createFileRoute('/api/session-status')({
                 sessions: [],
               },
             })
+          }
+
+          // Check ownership
+          if (!isSessionOwnedByUser(user, sessionKey)) {
+            return json({ ok: false, error: 'Not found' }, { status: 404 })
           }
 
           const session = await getSession(sessionKey)

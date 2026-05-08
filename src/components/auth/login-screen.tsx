@@ -1,10 +1,24 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { FormEvent } from 'react'
 
 export function LoginScreen() {
   const [password, setPassword] = useState('')
+  const [username, setUsername] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [multiUser, setMultiUser] = useState(false)
+  const [checkingMode, setCheckingMode] = useState(true)
+
+  // Detect auth mode on mount
+  useEffect(() => {
+    fetch('/api/auth-check')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.multiUser) setMultiUser(true)
+      })
+      .catch(() => {})
+      .finally(() => setCheckingMode(false))
+  }, [])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -12,26 +26,33 @@ export function LoginScreen() {
     setLoading(true)
 
     try {
+      const body = multiUser
+        ? { username, password }
+        : { password }
+
       const res = await fetch('/api/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify(body),
       })
 
       const data = await res.json()
 
       if (data.ok) {
-        // Success! Reload to trigger auth check
         window.location.reload()
       } else {
-        setError(data.error || 'Invalid password')
+        setError(data.error || (multiUser ? 'Invalid username or password' : 'Invalid password'))
         setLoading(false)
       }
-    } catch (err) {
+    } catch {
       setError('Authentication failed. Please try again.')
       setLoading(false)
     }
   }
+
+  const canSubmit = multiUser
+    ? username.trim().length > 0 && password.length > 0
+    : password.length > 0
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-primary-50 to-primary-100 px-4">
@@ -68,40 +89,69 @@ export function LoginScreen() {
 
           {/* Title */}
           <h2 className="mb-2 text-center text-lg font-semibold text-primary-900">
-            Enter Password
+            {checkingMode ? 'Loading...' : multiUser ? 'Sign In' : 'Enter Password'}
           </h2>
           <p className="mb-6 text-center text-sm text-primary-600">
-            This workspace is password-protected
+            {checkingMode
+              ? 'Checking configuration...'
+              : multiUser
+                ? 'Sign in to your workspace account'
+                : 'This workspace is password-protected'}
           </p>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Password"
-                className="w-full rounded-lg border border-primary-200 bg-primary-50 px-4 py-2.5 text-primary-900 placeholder-primary-400 outline-none transition-all focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-                disabled={loading}
-                autoFocus
-              />
-            </div>
+          {!checkingMode && (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {multiUser && (
+                <div>
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="Username"
+                    className="w-full rounded-lg border border-primary-200 bg-primary-50 px-4 py-2.5 text-primary-900 placeholder-primary-400 outline-none transition-all focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
+                    disabled={loading}
+                    autoFocus
+                    autoComplete="username"
+                  />
+                </div>
+              )}
 
-            {error && (
-              <div className="rounded-lg bg-red-50 px-4 py-2.5 text-sm text-red-700 ring-1 ring-red-200 dark:bg-red-950/40 dark:text-red-200 dark:ring-red-800/60">
-                {error}
+              <div>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Password"
+                  className="w-full rounded-lg border border-primary-200 bg-primary-50 px-4 py-2.5 text-primary-900 placeholder-primary-400 outline-none transition-all focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
+                  disabled={loading}
+                  autoFocus={!multiUser}
+                  autoComplete="current-password"
+                />
               </div>
-            )}
 
-            <button
-              type="submit"
-              disabled={loading || !password}
-              className="w-full rounded-lg bg-accent-500 px-4 py-2.5 font-medium text-white transition-all hover:bg-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-500/50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {loading ? 'Authenticating...' : 'Continue'}
-            </button>
-          </form>
+              {error && (
+                <div className="rounded-lg bg-red-50 px-4 py-2.5 text-sm text-red-700 ring-1 ring-red-200 dark:bg-red-950/40 dark:text-red-200 dark:ring-red-800/60">
+                  {error}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading || !canSubmit}
+                className="w-full rounded-lg bg-accent-500 px-4 py-2.5 font-medium text-white transition-all hover:bg-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-500/50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {loading ? 'Signing in...' : 'Continue'}
+              </button>
+            </form>
+          )}
+
+          {/* Shared memory note in multi-user mode */}
+          {!checkingMode && multiUser && (
+            <p className="mt-4 text-center text-xs text-primary-500">
+              Note: Memory files are shared across all users in this release.
+            </p>
+          )}
         </div>
 
         {/* Footer */}
