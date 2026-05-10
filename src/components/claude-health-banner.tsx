@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchClaudeAuthStatus } from '@/lib/claude-auth'
+import { fetchBackendConnectionStatus } from '@/lib/claude-auth'
 
 const POLL_INTERVAL = 30_000
 
@@ -24,7 +24,7 @@ export function ClaudeHealthBanner({
 
     async function check() {
       try {
-        await fetchClaudeAuthStatus()
+        await fetchBackendConnectionStatus()
         if (!cancelled) {
           setStatus('ok')
           setLastError(null)
@@ -61,7 +61,7 @@ export function ClaudeHealthBanner({
         type="button"
         onClick={() => {
           setStatus('checking')
-          fetchClaudeAuthStatus()
+          fetchBackendConnectionStatus()
             .then(() => {
               setStatus('ok')
               setLastError(null)

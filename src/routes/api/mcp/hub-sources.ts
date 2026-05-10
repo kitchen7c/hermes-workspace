@@ -11,6 +11,7 @@
  */
 import { createFileRoute } from '@tanstack/react-router'
 import { isAuthenticated } from '../../../server/auth-middleware'
+import { requireAdmin } from '../../../server/admin-gate'
 import {
   readHubSources,
   addHubSource,
@@ -49,6 +50,8 @@ export const Route = createFileRoute('/api/mcp/hub-sources')({
         if (!isAuthenticated(request)) {
           return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request)
+        if (adminCheck) return adminCheck
         let body: unknown
         try {
           body = await request.json()

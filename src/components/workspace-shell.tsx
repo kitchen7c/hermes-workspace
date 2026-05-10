@@ -21,9 +21,8 @@ import {
   useState,
 } from 'react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
-import { fetchClaudeAuthStatus, type AuthStatus } from '@/lib/claude-auth'
+import type { AuthStatus } from '@/lib/claude-auth'
 import { cn } from '@/lib/utils'
-import { ConnectionStartupScreen } from '@/components/connection-startup-screen'
 import { ChatSidebar } from '@/screens/chat/components/chat-sidebar'
 import { useChatSessions } from '@/screens/chat/hooks/use-chat-sessions'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -31,7 +30,6 @@ import { SIDEBAR_TOGGLE_EVENT } from '@/hooks/use-global-shortcuts'
 import { useSwipeNavigation } from '@/hooks/use-swipe-navigation'
 import { ChatPanel } from '@/components/chat-panel'
 import { ChatPanelToggle } from '@/components/chat-panel-toggle'
-import { LoginScreen } from '@/components/auth/login-screen'
 import { MobileTabBar } from '@/components/mobile-tab-bar'
 import { MobileHamburgerMenu } from '@/components/mobile-hamburger-menu'
 import { MobilePageHeader } from '@/components/mobile-page-header'
@@ -55,9 +53,13 @@ export const DESKTOP_SIDEBAR_BACKDROP_CLASS =
 
 type WorkspaceShellProps = {
   children?: React.ReactNode
+  initialAuthStatus?: AuthStatus | null
 }
 
-export function WorkspaceShell({ children }: WorkspaceShellProps) {
+export function WorkspaceShell({
+  children,
+  initialAuthStatus = null,
+}: WorkspaceShellProps) {
   const navigate = useNavigate()
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
@@ -107,21 +109,12 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
     return -1
   }, [])
 
-  const isClient = typeof window !== 'undefined'
-  // Both SSR and client start with the same value to avoid hydration mismatch.
-  // The ConnectionStartupScreen overlay verifies the real status on mount.
-  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
-  const [connectionVerified, setConnectionVerified] = useState(false)
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(
+    initialAuthStatus,
+  )
 
-  const authState = {
-    checked: !isClient || connectionVerified,
-    authenticated: authStatus?.authenticated ?? true,
-    authRequired: authStatus?.authRequired ?? false,
-  }
-
-  const handleStartupConnected = useCallback((status: AuthStatus) => {
+  const applyAuthStatus = useCallback((status: AuthStatus) => {
     setAuthStatus(status)
-    setConnectionVerified(true)
     // Set global user ID for namespaced storage
     if (status.multiUser && status.user?.id) {
       window.__hermes_userId = status.user.id
@@ -130,51 +123,14 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
     }
   }, [])
 
-  // Fallback startup verification in the shell itself.
-  // This prevents a bad loading loop if the splash component gets stuck even
-  // though /api/auth-check or /api/connection-status are already healthy.
   useEffect(() => {
-    if (typeof window === 'undefined' || connectionVerified) return
-    let cancelled = false
-
-    const verify = async () => {
-      try {
-        const status = await fetchClaudeAuthStatus(3000)
-        if (cancelled) return
-        setAuthStatus(status)
-        setConnectionVerified(true)
-        if (status.multiUser && status.user?.id) {
-          window.__hermes_userId = status.user.id
-        } else {
-          delete window.__hermes_userId
-        }
-        return
-      } catch {
-        // Fall through to connection-status as a looser readiness signal.
-      }
-
-      try {
-        const res = await fetch('/api/connection-status', { cache: 'no-store' })
-        if (!res.ok || cancelled) return
-        const data = (await res.json()) as {
-          ok?: boolean
-          chatReady?: boolean
-          modelConfigured?: boolean
-        }
-        if (data?.ok || (data?.chatReady && data?.modelConfigured)) {
-          setAuthStatus({ authenticated: true, authRequired: false })
-          setConnectionVerified(true)
-        }
-      } catch {
-        // Keep the startup screen if both checks fail.
-      }
+    if (initialAuthStatus) {
+      applyAuthStatus(initialAuthStatus)
+      return
     }
-
-    void verify()
-    return () => {
-      cancelled = true
-    }
-  }, [connectionVerified])
+    setAuthStatus(null)
+    delete window.__hermes_userId
+  }, [applyAuthStatus, initialAuthStatus])
 
   // Derive active session from URL
   const mobilePageTitle = (() => {
@@ -309,11 +265,6 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
     return <>{children}</>
   }
 
-  // Show login screen if auth is required and not authenticated
-  if (authState.authRequired && !authState.authenticated) {
-    return <LoginScreen />
-  }
-
   const shellStyle: React.CSSProperties & Record<'--titlebar-h', string> = {
     height: 'var(--vvh, 100dvh)',
     paddingTop: isElectron ? 40 : 0,
@@ -326,7 +277,7 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
         className="relative overflow-hidden theme-bg theme-text"
         style={shellStyle}
       >
-        <ClaudeReconnectBanner enabled={authState.checked} />
+        <ClaudeReconnectBanner enabled />
         {/* Electron: native-style title bar (absolute over the padding) */}
         {isElectron && (
           <div
@@ -464,9 +415,6 @@ export function WorkspaceShell({ children }: WorkspaceShellProps) {
           />
         ) : null}
 
-        {!authState.checked ? (
-          <ConnectionStartupScreen onConnected={handleStartupConnected} />
-        ) : null}
       </div>
 
       {!isChromeFreeSurface ? <MobileHamburgerMenu /> : null}

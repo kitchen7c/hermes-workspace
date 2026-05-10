@@ -14,9 +14,13 @@ vi.mock('../../../server/mcp-hub-sources-store', () => ({
 vi.mock('../../../server/auth-middleware', () => ({
   isAuthenticated: vi.fn(),
 }))
+vi.mock('../../../server/admin-gate', () => ({
+  requireAdmin: vi.fn(),
+}))
 
 import { readHubSources, addHubSource, updateHubSource, deleteHubSource } from '../../../server/mcp-hub-sources-store'
 import { isAuthenticated } from '../../../server/auth-middleware'
+import { requireAdmin } from '../../../server/admin-gate'
 import { Route as HubSourcesRoute } from './hub-sources'
 import { Route as HubSourcesIdRoute } from './hub-sources.$id'
 
@@ -25,6 +29,7 @@ const mockAddHubSource = vi.mocked(addHubSource)
 const mockUpdateHubSource = vi.mocked(updateHubSource)
 const mockDeleteHubSource = vi.mocked(deleteHubSource)
 const mockIsAuthenticated = vi.mocked(isAuthenticated)
+const mockRequireAdmin = vi.mocked(requireAdmin)
 
 const BUILTIN_SOURCES = [
   { id: 'mcp-get', name: 'Smithery Registry', url: 'https://registry.smithery.ai/servers', trust: 'community', format: 'smithery', enabled: true, builtin: true },
@@ -62,6 +67,7 @@ async function callDelete(request: Request, id: string) {
 beforeEach(() => {
   vi.clearAllMocks()
   mockIsAuthenticated.mockReturnValue(true)
+  mockRequireAdmin.mockReturnValue(null)
   mockReadHubSources.mockResolvedValue({ sources: BUILTIN_SOURCES as never, source: 'seed' })
 })
 
@@ -113,6 +119,16 @@ describe('POST /api/mcp/hub-sources', () => {
     expect(body.sources).toHaveLength(3)
   })
 
+  it('requires admin before adding a shared hub source', async () => {
+    const forbidden = new Response(JSON.stringify({ ok: false }), { status: 403 })
+    mockRequireAdmin.mockReturnValue(forbidden)
+
+    const res = await callPost(makeRequest('POST', 'http://localhost/api/mcp/hub-sources', {}))
+
+    expect(res.status).toBe(403)
+    expect(mockAddHubSource).not.toHaveBeenCalled()
+  })
+
   it('returns ok:false + errors on bad input', async () => {
     mockAddHubSource.mockResolvedValue({ ok: false, errors: [{ path: 'url', message: 'url must use https://' }] })
     const res = await callPost(makeRequest('POST', 'http://localhost/api/mcp/hub-sources', { id: 'bad', url: 'http://insecure.com' }))
@@ -150,6 +166,19 @@ describe('PUT /api/mcp/hub-sources/:id', () => {
     expect(body.ok).toBe(true)
   })
 
+  it('requires admin before updating a shared hub source', async () => {
+    const forbidden = new Response(JSON.stringify({ ok: false }), { status: 403 })
+    mockRequireAdmin.mockReturnValue(forbidden)
+
+    const res = await callPut(
+      makeRequest('PUT', 'http://localhost/api/mcp/hub-sources/corp', {}),
+      'corp',
+    )
+
+    expect(res.status).toBe(403)
+    expect(mockUpdateHubSource).not.toHaveBeenCalled()
+  })
+
   it('returns 404 for unknown id', async () => {
     mockUpdateHubSource.mockResolvedValue({ ok: false, errors: [{ path: 'id', message: 'source "nope" not found' }], status: 404 })
     const res = await callPut(makeRequest('PUT', 'http://localhost/api/mcp/hub-sources/nope', { name: 'X', url: 'https://x.com', trust: 'community', format: 'generic-json', enabled: true }), 'nope')
@@ -179,6 +208,16 @@ describe('DELETE /api/mcp/hub-sources/:id', () => {
     const res = await callDelete(makeRequest('DELETE', 'http://localhost/api/mcp/hub-sources/corp'), 'corp')
     const body = await res.json()
     expect(body.ok).toBe(true)
+  })
+
+  it('requires admin before deleting a shared hub source', async () => {
+    const forbidden = new Response(JSON.stringify({ ok: false }), { status: 403 })
+    mockRequireAdmin.mockReturnValue(forbidden)
+
+    const res = await callDelete(makeRequest('DELETE', 'http://localhost/api/mcp/hub-sources/corp'), 'corp')
+
+    expect(res.status).toBe(403)
+    expect(mockDeleteHubSource).not.toHaveBeenCalled()
   })
 
   it('returns 404 for unknown id', async () => {

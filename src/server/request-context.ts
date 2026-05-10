@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { getUserById, hasAnyUser, type WorkspaceUser } from './user-store'
@@ -66,6 +66,27 @@ export function buildUserContext(user: WorkspaceUser): UserWorkspaceContext {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true, mode: 0o700 })
     }
+  }
+
+  const workspacesFile = join(workspaceStateDir, 'workspaces.json')
+  const lastWorkspaceFile = join(workspaceStateDir, 'last_workspace.txt')
+  if (!existsSync(workspacesFile)) {
+    writeFileSync(
+      workspacesFile,
+      JSON.stringify({ workspaces: [], last: '' }, null, 2),
+      'utf-8',
+    )
+  }
+  if (!existsSync(lastWorkspaceFile)) {
+    writeFileSync(lastWorkspaceFile, '', 'utf-8')
+  }
+
+  if (!existsSync(localSessionsFile)) {
+    writeFileSync(
+      localSessionsFile,
+      JSON.stringify({ sessions: {}, messages: {} }, null, 2),
+      'utf-8',
+    )
   }
 
   return {

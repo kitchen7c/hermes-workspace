@@ -6,6 +6,7 @@
  */
 import { createFileRoute } from '@tanstack/react-router'
 import { isAuthenticated } from '../../../server/auth-middleware'
+import { requireAdmin } from '../../../server/admin-gate'
 import { updateHubSource, deleteHubSource, readHubSources } from '../../../server/mcp-hub-sources-store'
 import { invalidateUserSourceCache } from '../../../server/mcp-hub/sources/generic-json'
 
@@ -16,6 +17,8 @@ export const Route = createFileRoute('/api/mcp/hub-sources/$id')({
         if (!isAuthenticated(request)) {
           return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request)
+        if (adminCheck) return adminCheck
         let body: unknown
         try {
           body = await request.json()
@@ -52,6 +55,8 @@ export const Route = createFileRoute('/api/mcp/hub-sources/$id')({
         if (!isAuthenticated(request)) {
           return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
+        const adminCheck = requireAdmin(request)
+        if (adminCheck) return adminCheck
         const result = await deleteHubSource(params.id)
         if (!result.ok) {
           const status = result.status === 404 ? 404 : 200

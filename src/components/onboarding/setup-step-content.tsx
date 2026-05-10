@@ -15,9 +15,9 @@ import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 type AuthCheckResponse = {
-  authenticated?: boolean
-  authRequired?: boolean
-  error?: string
+  ok?: boolean
+  chatReady?: boolean
+  modelConfigured?: boolean
 }
 
 type ClaudeConfigResponse = {
@@ -38,22 +38,17 @@ export function ConnectionCheckStep({
     setLastError(null)
 
     try {
-      const response = await fetch('/api/auth-check', {
+      const response = await fetch('/api/connection-status', {
         signal: AbortSignal.timeout(5000),
       })
       const data = (await response.json()) as AuthCheckResponse
       const connected =
         response.ok &&
-        data.error !== 'server_timeout' &&
-        (data.authenticated === true || data.authRequired === false)
+        (data.ok === true || (data.chatReady === true && data.modelConfigured === true))
 
       setStatus(connected ? 'connected' : 'disconnected')
       if (!connected) {
-        setLastError(
-          data.error === 'server_timeout'
-            ? 'Hermes Agent did not respond in time.'
-            : 'Hermes Agent is not reachable yet.',
-        )
+        setLastError('Hermes Agent is not reachable yet.')
       }
     } catch (error) {
       setStatus('disconnected')

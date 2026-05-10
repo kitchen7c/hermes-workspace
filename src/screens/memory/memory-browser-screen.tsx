@@ -288,7 +288,16 @@ export function MemoryBrowserScreen() {
               />
             </div>
           </div>
+          <span
+            className="hidden shrink-0 rounded-full border border-amber-300/60 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 dark:border-amber-700/60 dark:bg-amber-950/30 dark:text-amber-200 md:inline-flex"
+            title="Memory files are shared across all users in this release."
+          >
+            Shared memory
+          </span>
         </div>
+        <p className="mt-2 text-xs text-primary-500 dark:text-neutral-400 md:hidden">
+          Shared memory: files are visible to all users in this release.
+        </p>
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 md:grid-cols-3 md:p-4">

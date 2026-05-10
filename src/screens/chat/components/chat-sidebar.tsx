@@ -20,6 +20,7 @@ import {
   Rocket01Icon,
   Search01Icon,
   Settings01Icon,
+  Logout03Icon,
   Sun02Icon,
   UserGroupIcon,
   UserMultipleIcon,
@@ -63,8 +64,20 @@ import {
   MenuTrigger,
 } from '@/components/ui/menu'
 import { applyTheme, useSettingsStore } from '@/hooks/use-settings'
+import { toast } from '@/components/ui/toast'
 
 type WorkspaceStats = Record<string, unknown>
+
+export async function requestLogout(): Promise<void> {
+  const res = await fetch('/api/auth/logout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  })
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`)
+  }
+}
 
 function ThemeToggleMini() {
   const _theme = useSettingsStore((state) => state.settings.theme)
@@ -635,6 +648,8 @@ function ChatSidebarComponent({
   const [deleteFriendlyId, setDeleteFriendlyId] = useState<string | null>(null)
   const [deleteSessionTitle, setDeleteSessionTitle] = useState('')
   const [providersOpen, setProvidersOpen] = useState(false)
+  const [logoutPending, setLogoutPending] = useState(false)
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [isHoverExpanded, setIsHoverExpanded] = useState(false)
   const sidebarHoverExpand = useChatSettingsStore(selectSidebarHoverExpand)
@@ -682,6 +697,22 @@ function ChatSidebarComponent({
     setDeleteDialogOpen(false)
     setDeleteSessionKey(null)
     setDeleteFriendlyId(null)
+  }
+
+  async function handleLogout() {
+    if (logoutPending) return
+
+    setLogoutPending(true)
+    try {
+      await requestLogout()
+      setUserMenuOpen(false)
+      delete window.__hermes_userId
+      window.location.reload()
+    } catch {
+      setUserMenuOpen(false)
+      toast('Sign out failed. Please try again.', { type: 'error' })
+      setLogoutPending(false)
+    }
   }
 
   useEffect(() => {
@@ -1177,7 +1208,7 @@ function ChatSidebarComponent({
           )}
         >
           {/* User menu trigger */}
-          <MenuRoot>
+          <MenuRoot open={userMenuOpen} onOpenChange={setUserMenuOpen}>
             <MenuTrigger
               data-tour="settings"
               className={cn(
@@ -1221,6 +1252,20 @@ function ChatSidebarComponent({
                     strokeWidth={1.5}
                   />
                   Settings
+                </span>
+              </MenuItem>
+              <MenuItem
+                onClick={handleLogout}
+                disabled={logoutPending}
+                className="justify-between"
+              >
+                <span className="flex items-center gap-2">
+                  <HugeiconsIcon
+                    icon={Logout03Icon}
+                    size={20}
+                    strokeWidth={1.5}
+                  />
+                  Sign out
                 </span>
               </MenuItem>
             </MenuContent>

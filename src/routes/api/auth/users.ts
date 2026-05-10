@@ -2,7 +2,12 @@ import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import { z } from 'zod'
 import { isAuthenticated, getAuthMode } from '../../../server/auth-middleware'
-import { requireJsonContentType } from '../../../server/rate-limit'
+import {
+  getClientIp,
+  rateLimit,
+  rateLimitResponse,
+  requireJsonContentType,
+} from '../../../server/rate-limit'
 import { getUser } from '../../../server/request-context'
 import {
   createUser,
@@ -55,6 +60,11 @@ export const Route = createFileRoute('/api/auth/users')({
 
         const csrfCheck = requireJsonContentType(request)
         if (csrfCheck) return csrfCheck
+
+        const ip = getClientIp(request)
+        if (!rateLimit(`auth-users:${ip}`, 3, 60_000)) {
+          return rateLimitResponse()
+        }
 
         try {
           const raw = await request.json().catch(() => ({}))

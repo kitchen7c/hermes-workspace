@@ -27,7 +27,8 @@ import {
 } from '@/components/onboarding/claude-onboarding'
 import { ErrorBoundary } from '@/components/error-boundary'
 import { LoginScreen } from '@/components/auth/login-screen'
-import { fetchClaudeAuthStatus, type AuthStatus } from '@/lib/claude-auth'
+import { ConnectionStartupScreen } from '@/components/connection-startup-screen'
+import { fetchWorkspaceAuthStatus, type AuthStatus } from '@/lib/claude-auth'
 import { getRootSurfaceState } from './-root-layout-state'
 
 const APP_CSP = [
@@ -269,6 +270,7 @@ function RootLayout() {
     null,
   )
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
+  const [connectionVerified, setConnectionVerified] = useState(false)
   const [mounted, setMounted] = useState(false)
   useApplyChatWidth()
 
@@ -341,32 +343,42 @@ function RootLayout() {
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
     let cancelled = false
-    fetchClaudeAuthStatus()
-      .then((status) => {
-        if (!cancelled) setAuthStatus(status)
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setAuthStatus({ authenticated: true, authRequired: false })
-        }
-      })
+    if (!connectionVerified) return undefined
+    fetchWorkspaceAuthStatus().then((status) => {
+      if (!cancelled) setAuthStatus(status)
+    }).catch(() => {
+      if (!cancelled) setAuthStatus(null)
+    })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [connectionVerified])
+
+  const handleStartupConnected = (status: AuthStatus) => {
+    setConnectionVerified(true)
+    setAuthStatus(status)
+    if (status.multiUser && status.user?.id) {
+      window.__hermes_userId = status.user.id
+    } else {
+      delete window.__hermes_userId
+    }
+  }
 
   const rootSurfaceState = getRootSurfaceState(onboardingComplete, authStatus)
 
   return (
     <QueryClientProvider client={queryClient}>
       <Toaster />
+      {mounted && !connectionVerified ? (
+        <ConnectionStartupScreen onConnected={handleStartupConnected} />
+      ) : null}
       {mounted && rootSurfaceState.showLogin ? <LoginScreen /> : null}
       {mounted && rootSurfaceState.showOnboarding ? <ClaudeOnboarding /> : null}
       {rootSurfaceState.showWorkspaceShell ? (
         <>
           <GlobalShortcutListener />
           <TerminalShortcutListener />
-          <WorkspaceShell>
+          <WorkspaceShell initialAuthStatus={authStatus}>
             <ErrorBoundary
               className="h-full min-h-0 flex-1"
               title="Something went wrong"

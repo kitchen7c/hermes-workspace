@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AuthStatus } from '@/lib/claude-auth'
 import { writeTextToClipboard } from '@/lib/clipboard'
-import { fetchClaudeAuthStatus } from '@/lib/claude-auth'
+import { fetchBackendConnectionStatus, fetchWorkspaceAuthStatus } from '@/lib/claude-auth'
 
 const POLL_INTERVAL_MS = 2_000
 const FAILURE_REVEAL_MS = 5_000
@@ -127,7 +127,8 @@ export function ConnectionStartupScreen({ onConnected }: Props) {
 
     const tryConnect = async () => {
       try {
-        const status = await fetchClaudeAuthStatus()
+        await fetchBackendConnectionStatus()
+        const status = await fetchWorkspaceAuthStatus()
         if (isDone.current) return
         isDone.current = true
         clearTimeout(failureTimer)
